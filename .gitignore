@@ -1,0 +1,9 @@
+# Environments
+.env
+
+# Temporary files
+.tmp/
+
+# Google OAuth credentials
+credentials.json
+token.json
