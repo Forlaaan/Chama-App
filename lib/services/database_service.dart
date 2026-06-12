@@ -297,6 +297,88 @@ class Loan {
   }
 }
 
+class Notification {
+  final String id;
+  final String memberId;
+  final String phoneNumber;
+  final String type; // CONTRIBUTION_CONFIRMATION, LOAN_APPROVED, etc.
+  final String message;
+  final String? sentAt;
+  final String status; // PENDING, SENT, etc.
+  final String createdAt;
+  final String updatedAt;
+  final String auditSignature;
+
+  Notification({
+    required this.id,
+    required this.memberId,
+    required this.phoneNumber,
+    required this.type,
+    required this.message,
+    this.sentAt,
+    required this.status,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.auditSignature,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'memberId': memberId,
+      'phoneNumber': phoneNumber,
+      'type': type,
+      'message': message,
+      'sentAt': sentAt,
+      'status': status,
+      'createdAt': createdAt,
+      'updatedAt': updatedAt,
+      'auditSignature': auditSignature,
+    };
+  }
+
+  factory Notification.fromMap(Map<String, dynamic> map) {
+    return Notification(
+      id: map['id'] as String,
+      memberId: map['memberId'] as String,
+      phoneNumber: map['phoneNumber'] as String,
+      type: map['type'] as String,
+      message: map['message'] as String,
+      sentAt: map['sentAt'] as String?,
+      status: map['status'] as String,
+      createdAt: map['createdAt'] as String,
+      updatedAt: map['updatedAt'] as String,
+      auditSignature: map['auditSignature'] as String,
+    );
+  }
+
+  Notification copyWith({
+    String? id,
+    String? memberId,
+    String? phoneNumber,
+    String? type,
+    String? message,
+    String? sentAt,
+    String? status,
+    String? createdAt,
+    String? updatedAt,
+    String? auditSignature,
+  }) {
+    return Notification(
+      id: id ?? this.id,
+      memberId: memberId ?? this.memberId,
+      phoneNumber: phoneNumber ?? this.phoneNumber,
+      type: type ?? this.type,
+      message: message ?? this.message,
+      sentAt: sentAt ?? this.sentAt,
+      status: status ?? this.status,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      auditSignature: auditSignature ?? this.auditSignature,
+    );
+  }
+}
+
 // ==========================================
 // Database Service
 // ==========================================
@@ -558,5 +640,45 @@ class DatabaseService {
   // Explicitly prevent deletions on Transaction
   Future<void> deleteTransaction(String id) async {
     throw UnsupportedError('Transactions are immutable (BR-002) and cannot be deleted.');
+  }
+
+  // ==========================================
+  // Notification CRUD
+  // ==========================================
+
+  Future<void> createNotification(Notification notification, String actorId) async {
+    final db = await database;
+    final timestamp = DateTime.now().toUtc().toIso8601String();
+    final id = notification.id.isEmpty ? _generateUuid() : notification.id;
+
+    final signatureData = '${notification.type}|${notification.phoneNumber}|${notification.status}';
+    final signature = _generateAuditSignature(id, actorId, timestamp, signatureData);
+
+    final finalNotification = notification.copyWith(
+      id: id,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      auditSignature: signature,
+    );
+
+    await db.insert('Notification', finalNotification.toMap());
+  }
+
+  Future<Notification?> getNotification(String id) async {
+    final db = await database;
+    final maps = await db.query(
+      'Notification',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    if (maps.isEmpty) return null;
+    return Notification.fromMap(maps.first);
+  }
+
+  Future<List<Notification>> getAllNotifications() async {
+    final db = await database;
+    final maps = await db.query('Notification');
+    return maps.map((n) => Notification.fromMap(n)).toList();
   }
 }
