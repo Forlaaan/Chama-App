@@ -99,6 +99,21 @@ CREATE TABLE IF NOT EXISTS "Penalty" (
     FOREIGN KEY (memberId) REFERENCES "Member"(id) ON DELETE RESTRICT
 );
 
+-- Offline Queue: pending_notifications stores outgoing SMS messages
+-- when the device is offline. SyncWorker drains this queue on connectivity
+-- restoration, applying exponential backoff on API failures (BR-010).
+CREATE TABLE IF NOT EXISTS "pending_notifications" (
+    id TEXT PRIMARY KEY,
+    notificationId TEXT NOT NULL,
+    phoneNumber TEXT NOT NULL,
+    message TEXT NOT NULL,
+    retryCount INTEGER NOT NULL DEFAULT 0,
+    nextRetryAt TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'QUEUED',
+    createdAt TEXT NOT NULL,
+    FOREIGN KEY (notificationId) REFERENCES "Notification"(id) ON DELETE CASCADE
+);
+
 -- Triggers to enforce Immutability on Transaction table (BR-002)
 CREATE TRIGGER IF NOT EXISTS prevent_transaction_update
 BEFORE UPDATE ON "Transaction"

@@ -1,5 +1,3 @@
-# execution/controllers.py
-
 import sqlite3
 import hashlib
 import uuid
@@ -216,6 +214,115 @@ class DatabaseService:
                 'auditSignature': row[11]
             })
         return transactions
+
+    # ==========================================
+    # Pending Notifications Queue (BR-010 Offline First)
+    # ==========================================
+
+    def add_to_pending_queue(self, pending: Dict[str, Any]) -> str:
+        """Insert a notification into the offline pending queue."""
+        pending_id = pending.get('id') or generate_uuid()
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO "pending_notifications" (id, notificationId, phoneNumber, message, retryCount, nextRetryAt, status, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            pending_id,
+            pending['notificationId'],
+            pending['phoneNumber'],
+            pending['message'],
+            pending.get('retryCount', 0),
+            pending.get('nextRetryAt', timestamp),
+            pending.get('status', 'QUEUED'),
+            timestamp
+        ))
+        self.conn.commit()
+        return pending_id
+
+    def get_due_pending_notifications(self, current_time: str) -> List[Dict[str, Any]]:
+        """Fetch all queued notifications whose nextRetryAt <= current_time."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, notificationId, phoneNumber, message, retryCount, nextRetryAt, status, createdAt
+            FROM "pending_notifications"
+            WHERE status = 'QUEUED' AND nextRetryAt <= ?
+            ORDER BY nextRetryAt ASC
+        """, (current_time,))
+        rows = cursor.fetchall()
+        results = []
+        for row in rows:
+            results.append({
+                'id': row[0],
+                'notificationId': row[1],
+                'phoneNumber': row[2],
+                'message': row[3],
+                'retryCount': row[4],
+                'nextRetryAt': row[5],
+                'status': row[6],
+                'createdAt': row[7],
+            })
+        return results
+
+    def update_pending_notification(self, pending_id: str, updates: Dict[str, Any]) -> None:
+        """Update retryCount, nextRetryAt, or status on a pending notification."""
+        set_clauses = []
+        values = []
+        for key in ('retryCount', 'nextRetryAt', 'status'):
+            if key in updates:
+                set_clauses.append(f"{key} = ?")
+                values.append(updates[key])
+        if not set_clauses:
+            return
+        values.append(pending_id)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f'UPDATE "pending_notifications" SET {", ".join(set_clauses)} WHERE id = ?',
+            tuple(values)
+        )
+        self.conn.commit()
+
+    def remove_pending_notification(self, pending_id: str) -> None:
+        """Remove a pending notification after successful dispatch or permanent failure."""
+        cursor = self.conn.cursor()
+        cursor.execute('DELETE FROM "pending_notifications" WHERE id = ?', (pending_id,))
+        self.conn.commit()
+
+    def update_notification_status(self, notification_id: str, status: str, sent_at: str = None) -> None:
+        """Update the parent Notification record status (e.g. SENT, FAILED)."""
+        cursor = self.conn.cursor()
+        if sent_at:
+            cursor.execute("""
+                UPDATE "Notification" SET status = ?, sentAt = ? WHERE id = ?
+            """, (status, sent_at, notification_id))
+        else:
+            cursor.execute("""
+                UPDATE "Notification" SET status = ? WHERE id = ?
+            """, (status, notification_id))
+        self.conn.commit()
+
+    def get_notification(self, notification_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single Notification by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, memberId, phoneNumber, type, message, sentAt, status, createdAt, updatedAt, auditSignature
+            FROM "Notification" WHERE id = ?
+        """, (notification_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            'id': row[0],
+            'memberId': row[1],
+            'phoneNumber': row[2],
+            'type': row[3],
+            'message': row[4],
+            'sentAt': row[5],
+            'status': row[6],
+            'createdAt': row[7],
+            'updatedAt': row[8],
+            'auditSignature': row[9],
+        }
 
 
 class TreasurerController:

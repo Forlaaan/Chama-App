@@ -226,6 +226,45 @@ Represents missed-payment penalties.
 
 ---
 
+## PendingNotification
+
+Represents the offline SMS dispatch queue. When the device is offline, outgoing
+Notifications are enqueued here. The SyncWorker drains this table when
+connectivity is restored, applying exponential backoff on API failures.
+
+### Fields
+
+| Field          | Type     |
+| -------------- | -------- |
+| id             | UUID     |
+| notificationId | FK       |
+| phoneNumber    | String   |
+| message        | Text     |
+| retryCount     | Integer  |
+| nextRetryAt    | DateTime |
+| status         | Enum     |
+| createdAt      | DateTime |
+
+### Status Values
+
+* QUEUED
+* FAILED
+
+### Relationships
+
+* Belongs to one Notification (FK: notificationId).
+
+### Rules
+
+* Maximum retry attempts: 3.
+* Backoff formula: delay = 2^retryCount × BASE_DELAY_SECONDS (default 2s).
+* After 3 failed attempts, the parent Notification status is set to FAILED
+  and the PendingNotification record is removed from the queue.
+* On successful dispatch, the parent Notification status is set to SENT,
+  sentAt is populated, and the PendingNotification record is removed.
+
+---
+
 # 4. Entity Relationships
 
 Group
@@ -383,6 +422,33 @@ The application must function without internet.
 All operations are stored locally first.
 
 Synchronization occurs when connectivity becomes available.
+
+### SMS Notification Architecture (Two-Table Split)
+
+SMS dispatch uses a two-table architecture to separate the permanent audit
+trail from the transient offline queue:
+
+1. **Notification table** — The permanent, auditable record of every SMS
+   notification the system has generated. Contains the notification type,
+   recipient, message body, and final status (PENDING → SENT or FAILED).
+   This table is the source of truth for notification history.
+
+2. **pending_notifications table** — A transient offline queue. When a
+   Notification is created while the device is offline (or the API is
+   unreachable), a corresponding PendingNotification is inserted here.
+   The SyncWorker processes this queue on connectivity restoration.
+
+### Dispatch Flow
+
+1. NotificationService creates a Notification (status=PENDING) and enqueues
+   a PendingNotification (status=QUEUED, retryCount=0).
+2. SyncWorker queries pending_notifications for items where nextRetryAt ≤ now.
+3. For each item, SyncWorker calls the Africa's Talking SMS API.
+4. On success: PendingNotification is deleted, Notification status → SENT.
+5. On failure: retryCount is incremented, nextRetryAt is set using
+   exponential backoff (2^retryCount × 2 seconds).
+6. After 3 failed attempts: PendingNotification is deleted,
+   Notification status → FAILED.
 
 ---
 
