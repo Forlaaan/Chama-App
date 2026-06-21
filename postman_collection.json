@@ -1,0 +1,494 @@
+{
+  "info": {
+    "name": "Chama Governance Backend - Chapter 4 Demo",
+    "description": "Complete Postman collection for the Chapter 4 demonstration of the Mobile-Based Governance System for Transparency in Kenyan Chamas.\n\nIncludes: Auth, Members, Transactions, Notifications (from partner's baseline), and Loans (BR-004 to BR-007).\n\nSetup:\n1. Set baseUrl to http://localhost:4000\n2. Register or login to get a Firebase idToken\n3. Paste the idToken into the firebaseToken collection variable\n4. All protected routes will use Bearer {{firebaseToken}} automatically",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",       "value": "http://localhost:4000",  "type": "string" },
+    { "key": "firebaseToken", "value": "",                       "type": "string", "description": "Paste Firebase idToken here after login/register" },
+    { "key": "groupId",       "value": "group-001",              "type": "string" },
+    { "key": "memberId",      "value": "",                       "type": "string", "description": "Set after creating a member" },
+    { "key": "loanId",        "value": "",                       "type": "string", "description": "Set after POST /api/loans/request" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{firebaseToken}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+
+    {
+      "name": "── Auth ──────────────────────",
+      "item": [
+        {
+          "name": "Auth - Register Firebase User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.data && json.data.idToken) {",
+                  "  pm.collectionVariables.set('firebaseToken', json.data.idToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"treasurer@example.com\",\n  \"password\": \"StrongPass123\",\n  \"fullName\": \"Mary Wanjiku\",\n  \"phoneNumber\": \"+254700000001\",\n  \"groupId\": \"{{groupId}}\",\n  \"role\": \"TREASURER\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "register"]
+            }
+          }
+        },
+        {
+          "name": "Auth - Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.data && json.data.idToken) {",
+                  "  pm.collectionVariables.set('firebaseToken', json.data.idToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"treasurer@example.com\",\n  \"password\": \"StrongPass123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Auth - Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "profile"]
+            }
+          }
+        },
+        {
+          "name": "Auth - Verify Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idToken\": \"{{firebaseToken}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/verify-token",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "verify-token"]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "── Members ───────────────────",
+      "item": [
+        {
+          "name": "Members - Create Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.data && json.data.id) {",
+                  "  pm.collectionVariables.set('memberId', json.data.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"groupId\": \"{{groupId}}\",\n  \"fullName\": \"John Mwangi\",\n  \"phoneNumber\": \"+254700000002\",\n  \"email\": \"john@example.com\",\n  \"role\": \"MEMBER\",\n  \"accountBalance\": \"0.00\",\n  \"deviceToken\": \"mobile-device-token\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/members",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "members"]
+            }
+          }
+        },
+        {
+          "name": "Members - Get All Members",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/members",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "members"]
+            }
+          }
+        },
+        {
+          "name": "Members - Get Member By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/members/{{memberId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "members", "{{memberId}}"]
+            }
+          }
+        },
+        {
+          "name": "Members - Update Member",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"John K. Mwangi\",\n  \"phoneNumber\": \"+254700000002\",\n  \"role\": \"MEMBER\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/members/{{memberId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "members", "{{memberId}}"]
+            }
+          }
+        },
+        {
+          "name": "Members - Get Balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/members/{{memberId}}/balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "members", "{{memberId}}", "balance"]
+            }
+          }
+        },
+        {
+          "name": "Members - Get Contributions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/members/{{memberId}}/contributions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "members", "{{memberId}}", "contributions"]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "── Transactions ──────────────",
+      "item": [
+        {
+          "name": "Transactions - Record Contribution",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"memberId\": \"{{memberId}}\",\n  \"amount\": \"1000.00\",\n  \"description\": \"June monthly contribution\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/transactions/contributions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transactions", "contributions"]
+            }
+          }
+        },
+        {
+          "name": "Transactions - Record Repayment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"memberId\": \"{{memberId}}\",\n  \"loanId\": \"{{loanId}}\",\n  \"amount\": \"500.00\",\n  \"description\": \"Loan repayment\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/transactions/repayments",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transactions", "repayments"]
+            }
+          }
+        },
+        {
+          "name": "Transactions - Get All",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transactions"]
+            }
+          }
+        },
+        {
+          "name": "Transactions - Get By Member",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/transactions/member/{{memberId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transactions", "member", "{{memberId}}"]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "── Notifications ─────────────",
+      "item": [
+        {
+          "name": "Notifications - Test SMS",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phoneNumber\": \"+254700000002\",\n  \"message\": \"Test SMS from Chama Governance System\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/sms/test",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "notifications", "sms", "test"]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "── Loans (BR-004 to BR-007) ──",
+      "item": [
+        {
+          "name": "Loans - 1. Request Loan (BR-004)",
+          "description": "BR-004: Any authenticated member may submit a loan application.\n\nStatus is automatically initialised to PENDING by the service layer.\nThe actor linked to the Firebase token must be a registered Member.\n\nBR-006 interest formula (provisional):\n  totalRepayable = principalAmount + (principalAmount × interestRate)\nExample: principal=10000, interestRate=0.10 → totalRepayable=11000.00",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.data && json.data.id) {",
+                  "  pm.collectionVariables.set('loanId', json.data.id);",
+                  "  console.log('loanId set to:', json.data.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"memberId\": \"{{memberId}}\",\n  \"groupId\": \"{{groupId}}\",\n  \"principalAmount\": \"10000.00\",\n  \"interestRate\": \"0.10\",\n  \"dueDate\": \"2026-12-31\",\n  \"description\": \"Emergency business loan\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/loans/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "loans", "request"]
+            }
+          },
+          "response": [
+            {
+              "name": "201 - Loan Requested",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Loan request submitted. Status: PENDING. Awaiting ADMIN or TREASURER approval (BR-004).\",\n  \"data\": {\n    \"id\": \"<uuid>\",\n    \"memberId\": \"<memberId>\",\n    \"groupId\": \"group-001\",\n    \"principalAmount\": \"10000.00\",\n    \"interestRate\": \"0.1000\",\n    \"totalRepayable\": \"11000.00\",\n    \"amountPaid\": \"0.00\",\n    \"dueDate\": \"2026-12-31\",\n    \"status\": \"PENDING\",\n    \"approvedBy\": null,\n    \"createdAt\": \"2026-06-21T10:00:00.000Z\",\n    \"updatedAt\": \"2026-06-21T10:00:00.000Z\"\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Loans - 2. Approve Loan (BR-005)",
+          "description": "BR-005: Restricted to ADMIN or TREASURER role.\n\nUpon approval the service atomically:\n  1. Sets Loan.status → ACTIVE, records approvedBy\n  2. Inserts an append-only LOAN_DISBURSEMENT transaction (BR-002)\n  3. Increments Member.accountBalance by principalAmount\n  4. Queues a LOAN_APPROVED SMS via Africa's Talking sandbox\n\nRequires loanId variable to be set (auto-set by the Request Loan step).",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/loans/{{loanId}}/approve",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "loans", "{{loanId}}", "approve"]
+            }
+          },
+          "response": [
+            {
+              "name": "200 - Loan Approved",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Loan approved. Disbursement transaction recorded and SMS notification triggered.\",\n  \"data\": {\n    \"loan\": {\n      \"id\": \"<loanId>\",\n      \"status\": \"ACTIVE\",\n      \"approvedBy\": \"<actorMemberId>\"\n    },\n    \"disbursement\": {\n      \"transactionId\": \"<uuid>\",\n      \"amount\": \"10000.00\"\n    },\n    \"accountBalance\": \"10000.00\",\n    \"notification\": {\n      \"smsResult\": { \"status\": \"SENT\" }\n    }\n  }\n}"
+            },
+            {
+              "name": "409 - Loan Not Pending",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Only PENDING loans can be approved. Current status: ACTIVE\"\n}"
+            },
+            {
+              "name": "403 - Insufficient Role",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Role 'MEMBER' is not authorised for this loan operation. Requires ADMIN or TREASURER.\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Loans - 3. Record Repayment",
+          "description": "Records a dynamic LOAN_REPAYMENT transaction (append-only, BR-002).\nRestricted to ADMIN or TREASURER.\n\nBehavior:\n  - Inserts LOAN_REPAYMENT transaction row\n  - Increments Loan.amountPaid\n  - Deducts amount from Member.accountBalance\n  - If amountPaid >= totalRepayable → status transitions to PAID automatically\n\nRepayment amount cannot exceed the outstanding balance (totalRepayable - amountPaid).",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"2000.00\",\n  \"description\": \"First instalment — June 2026\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/loans/{{loanId}}/repay",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "loans", "{{loanId}}", "repay"]
+            }
+          },
+          "response": [
+            {
+              "name": "201 - Repayment Recorded",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Repayment recorded. Outstanding: KES 9000.00.\",\n  \"data\": {\n    \"repayment\": {\n      \"transactionId\": \"<uuid>\",\n      \"amount\": \"2000.00\",\n      \"transactionType\": \"LOAN_REPAYMENT\"\n    },\n    \"loan\": {\n      \"id\": \"<loanId>\",\n      \"amountPaid\": \"2000.00\",\n      \"totalRepayable\": \"11000.00\",\n      \"status\": \"ACTIVE\"\n    },\n    \"accountBalance\": \"8000.00\"\n  }\n}"
+            },
+            {
+              "name": "201 - Loan Fully Repaid",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Loan fully repaid. Status updated to PAID.\",\n  \"data\": {\n    \"repayment\": {\n      \"transactionId\": \"<uuid>\",\n      \"amount\": \"9000.00\",\n      \"transactionType\": \"LOAN_REPAYMENT\"\n    },\n    \"loan\": {\n      \"id\": \"<loanId>\",\n      \"amountPaid\": \"11000.00\",\n      \"totalRepayable\": \"11000.00\",\n      \"status\": \"PAID\"\n    },\n    \"accountBalance\": \"0.00\"\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Loans - 4. Get Overdue Loans (BR-007)",
+          "description": "BR-007: Returns all loans where:\n  currentDate > dueDate AND amountPaid < totalRepayable\n\nAlso transitions any ACTIVE loans past their deadline to OVERDUE status.\n\nOptional query param: groupId (scope to a single chama)\n\nNOTE: BR-008 Penalty Application is NOT executed here — penalty formula requires stakeholder confirmation (Blueprint §8, Open Question #2).",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/loans/overdue?groupId={{groupId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "loans", "overdue"],
+              "query": [
+                {
+                  "key": "groupId",
+                  "value": "{{groupId}}",
+                  "description": "Optional: scope to a specific group"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 - Overdue Loans Found",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"asOf\": \"2026-06-21\",\n    \"overdueCount\": 1,\n    \"newlyMarkedOverdue\": [\"<loanId>\"],\n    \"penaltyNote\": \"Penalty application (BR-008) requires a group-level configurable penalty amount. This is an open stakeholder question — not yet implemented.\",\n    \"loans\": [\n      {\n        \"id\": \"<loanId>\",\n        \"memberId\": \"<memberId>\",\n        \"principalAmount\": \"10000.00\",\n        \"totalRepayable\": \"11000.00\",\n        \"amountPaid\": \"2000.00\",\n        \"dueDate\": \"2026-01-01\",\n        \"status\": \"OVERDUE\"\n      }\n    ]\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Loans - 5. Get Loan By ID",
+          "description": "Fetch a single loan record by UUID. Available to any authenticated member.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/loans/{{loanId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "loans", "{{loanId}}"]
+            }
+          }
+        },
+
+        {
+          "name": "Loans - 6. Get Member Loans",
+          "description": "Retrieve all loans for a specific member, ordered by creation date descending.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/loans/member/{{memberId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "loans", "member", "{{memberId}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

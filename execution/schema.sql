@@ -1,4 +1,3 @@
--- execution/schema.sql
 PRAGMA key = 'SECRET_KEY';
 PRAGMA cipher_page_size = 4096;
 PRAGMA kdf_iter = 64000;
@@ -99,9 +98,6 @@ CREATE TABLE IF NOT EXISTS "Penalty" (
     FOREIGN KEY (memberId) REFERENCES "Member"(id) ON DELETE RESTRICT
 );
 
--- Offline Queue: pending_notifications stores outgoing SMS messages
--- when the device is offline. SyncWorker drains this queue on connectivity
--- restoration, applying exponential backoff on API failures (BR-010).
 CREATE TABLE IF NOT EXISTS "pending_notifications" (
     id TEXT PRIMARY KEY,
     notificationId TEXT NOT NULL,
@@ -114,7 +110,6 @@ CREATE TABLE IF NOT EXISTS "pending_notifications" (
     FOREIGN KEY (notificationId) REFERENCES "Notification"(id) ON DELETE CASCADE
 );
 
--- Triggers to enforce Immutability on Transaction table (BR-002)
 CREATE TRIGGER IF NOT EXISTS prevent_transaction_update
 BEFORE UPDATE ON "Transaction"
 BEGIN
@@ -126,4 +121,3 @@ BEFORE DELETE ON "Transaction"
 BEGIN
     SELECT RAISE(FAIL, 'Transactions are immutable and cannot be deleted.');
 END;
-

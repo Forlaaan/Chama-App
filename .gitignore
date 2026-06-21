@@ -1,9 +1,5 @@
-# Environments
+node_modules/
 .env
-
-# Temporary files
-.tmp/
-
-# Google OAuth credentials
-credentials.json
-token.json
+database/*.db
+database/*.sqlite
+npm-debug.log*
