@@ -112,4 +112,35 @@ async function notifyContribution({ member, amount, transactionId }) {
   }
 }
 
-module.exports = { sendSMS, notifyContribution };
+async function sendOrQueueSms({ memberId, phoneNumber, type, message }) {
+  try {
+    const smsResult = await sendSMS(phoneNumber, message);
+    const notification = createNotificationRecord({
+      memberId,
+      phoneNumber,
+      type,
+      message,
+      status: smsResult.status === 'SKIPPED' ? 'SKIPPED' : 'SENT',
+      sentAt: smsResult.status === 'SKIPPED' ? null : now()
+    });
+
+    return { notification, smsResult };
+  } catch (error) {
+    const notification = createNotificationRecord({
+      memberId,
+      phoneNumber,
+      type,
+      message,
+      status: 'QUEUED',
+      sentAt: null
+    });
+    queuePendingNotification(notification);
+
+    return {
+      notification,
+      smsResult: { status: 'QUEUED', reason: error.message }
+    };
+  }
+}
+
+module.exports = { sendSMS, notifyContribution, sendOrQueueSms };

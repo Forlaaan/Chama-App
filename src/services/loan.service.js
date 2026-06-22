@@ -210,7 +210,7 @@ function requestLoan(body, authUser) {
  *  5. Update member accountBalance += principalAmount.
  *  6. Queue SMS notification via NotificationService.
  */
-function approveLoan(params, authUser) {
+async function approveLoan(params, authUser) {
   const actor = requireLinkedMember(authUser);
   requirePrivileged(actor);
 
@@ -285,7 +285,7 @@ function approveLoan(params, authUser) {
 
   let notificationResult = null;
   try {
-    notificationResult = notificationService.sendOrQueueSms({
+    notificationResult = await notificationService.sendOrQueueSms({
       memberId:    member.id,
       phoneNumber: member.phoneNumber,
       type:        'LOAN_APPROVED',

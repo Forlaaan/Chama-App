@@ -16,4 +16,8 @@ function addMoney(current, delta) {
   return fromCents(toCents(current || '0') + toCents(delta));
 }
 
-module.exports = { toCents, fromCents, addMoney };
+function subtractMoney(current, delta) {
+  return fromCents(toCents(current || '0') - toCents(delta));
+}
+
+module.exports = { toCents, fromCents, addMoney, subtractMoney };
