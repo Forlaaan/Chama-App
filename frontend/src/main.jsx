@@ -1,27 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { auth, RecaptchaVerifier, signInWithPhoneNumber } from './firebase';
+import { cacheGet, cacheSet } from './cache';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
-
-const demoMembers = [
-  { id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479', groupId: 'group-001', fullName: 'John Doe', phoneNumber: '+254700000001', email: 'john@example.com', role: 'MEMBER', accountBalance: '45000.00' },
-  { id: '9f8c2f48-21e6-4d24-9be5-7d877160fabc', groupId: 'group-001', fullName: 'Jane Smith', phoneNumber: '+254700000002', email: 'jane@example.com', role: 'MEMBER', accountBalance: '30000.00' },
-  { id: '2dc57f94-02da-46da-b710-f0b617c2ed71', groupId: 'group-001', fullName: 'Peter Mwangi', phoneNumber: '+254700000003', email: 'peter@example.com', role: 'MEMBER', accountBalance: '18000.00' },
-  { id: 'a7597f71-9243-47bd-8dc2-51d938c7db61', groupId: 'group-001', fullName: 'Alice Wanjiku', phoneNumber: '+254700000004', email: 'alice@example.com', role: 'TREASURER', accountBalance: '62000.00' }
-];
-
-const demoTransactions = [
-  { id: 'tx-001', memberId: demoMembers[0].id, groupId: 'group-001', amount: '5000.00', transactionType: 'CONTRIBUTION', description: 'Contribution', timestamp: '2026-06-05T09:00:00.000Z' },
-  { id: 'tx-002', memberId: demoMembers[1].id, groupId: 'group-001', amount: '15000.00', transactionType: 'LOAN_DISBURSEMENT', description: 'Loan Approved', timestamp: '2026-06-07T12:30:00.000Z' },
-  { id: 'tx-003', memberId: demoMembers[2].id, groupId: 'group-001', amount: '3000.00', transactionType: 'CONTRIBUTION', description: 'Contribution', timestamp: '2026-06-12T14:15:00.000Z' }
-];
-
-const demoLoans = [
-  { id: '6e5bd9c4-4317-4f21-8f7f-22e8e7f448d6', memberId: demoMembers[0].id, groupId: 'group-001', principalAmount: '10000.00', interestRate: '0.1000', totalRepayable: '11000.00', amountPaid: '1000.00', dueDate: '2026-07-15', status: 'ACTIVE', approvedBy: demoMembers[3].id },
-  { id: '74f6ef39-3b91-45ab-b3e3-d08eb9a17fc1', memberId: demoMembers[1].id, groupId: 'group-001', principalAmount: '20000.00', interestRate: '0.1000', totalRepayable: '22000.00', amountPaid: '0.00', dueDate: '2026-08-01', status: 'PENDING', approvedBy: null },
-  { id: '1de4991b-9125-4c91-b664-aea1f0f14d8e', memberId: demoMembers[2].id, groupId: 'group-001', principalAmount: '8000.00', interestRate: '0.1000', totalRepayable: '8800.00', amountPaid: '0.00', dueDate: '2026-07-10', status: 'PENDING', approvedBy: null }
-];
+// VITE_API_BASE_URL should be set in .env when building for a real device.
+// For a real Android device on the same WiFi as the dev PC, set it to the PC's LAN IP.
+// e.g. VITE_API_BASE_URL=http://192.168.100.33:4000
+// For the Android emulator only, 10.0.2.2 maps to the host PC.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://192.168.100.33:4000';
 
 function money(value) {
   return 'KSH ' + Number(value || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 });
@@ -33,7 +20,7 @@ function shortDate(value) {
 }
 
 function getMemberName(members, id) {
-  const member = members.find((item) => item.id === id);
+  const member = members?.find((item) => item.id === id);
   return member ? member.fullName : 'Unknown Member';
 }
 
@@ -41,176 +28,384 @@ async function apiFetch(path, options) {
   const settings = options || {};
   const headers = { 'Content-Type': 'application/json' };
   if (settings.token) headers.Authorization = 'Bearer ' + settings.token;
-  const response = await fetch(API_BASE_URL + path, {
-    method: settings.method || 'GET',
-    headers,
-    body: settings.body ? JSON.stringify(settings.body) : undefined
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message || 'Request failed');
-  return payload.data === undefined ? payload : payload.data;
+  
+  try {
+    const response = await fetch(API_BASE_URL + path, {
+      method: settings.method || 'GET',
+      headers,
+      body: settings.body ? JSON.stringify(settings.body) : undefined
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Request failed');
+    
+    const data = payload.data === undefined ? payload : payload.data;
+    
+    // Cache GET responses
+    if ((settings.method || 'GET') === 'GET') {
+      cacheSet(path, data);
+    }
+    
+    return data;
+  } catch (error) {
+    // Try cache for GET requests if we have a network-level failure
+    if (error.name === 'TypeError' && (settings.method || 'GET') === 'GET') {
+      const cached = cacheGet(path);
+      if (cached) return cached;
+    }
+    // Show the REAL error so we can debug — don't mask it
+    const url = API_BASE_URL + path;
+    throw new Error(`API call to ${url} failed: ${error.name}: ${error.message}`);
+  }
 }
 
 function App() {
   const [screen, setScreen] = useState('login');
   const [language, setLanguage] = useState('ENG');
-  const [role, setRole] = useState('MEMBER');
   const [token, setToken] = useState(localStorage.getItem('chamaToken') || '');
-  const [members, setMembers] = useState(demoMembers);
-  const [transactions, setTransactions] = useState(demoTransactions);
-  const [loans, setLoans] = useState(demoLoans);
-  const [currentMemberId, setCurrentMemberId] = useState(demoMembers[0].id);
+  const [members, setMembers] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [loans, setLoans] = useState([]);
+  const [currentMember, setCurrentMember] = useState(null);
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  const currentMember = members.find((member) => member.id === currentMemberId) || members[0];
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const role = currentMember?.role || 'MEMBER';
+
   const navItems = useMemo(() => [
     { id: 'member', label: 'Dashboard', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
     { id: 'ledger', label: 'Ledger', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
     { id: 'requestLoan', label: 'Request Loan', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
-    { id: 'admin', label: 'Admin', roles: ['TREASURER', 'ADMIN'] },
-    { id: 'members', label: 'Members', roles: ['TREASURER', 'ADMIN'] },
-    { id: 'sms', label: 'SMS', roles: ['TREASURER', 'ADMIN'] }
+    { id: 'treasurer', label: 'Treasurer', roles: ['TREASURER'] },
+    { id: 'admin', label: 'Admin', roles: ['ADMIN'] }
   ], []);
 
-  async function refreshData() {
-    if (!token) {
-      setNotice('Demo mode: paste a Firebase idToken on login to use live backend data.');
-      return;
-    }
+  async function refreshData(authToken = token) {
+    if (!authToken) return;
     setLoading(true);
+    setNotice('');
     try {
-      const liveMembers = await apiFetch('/api/members', { token });
-      const liveTransactions = await apiFetch('/api/transactions', { token });
-      setMembers(liveMembers.length ? liveMembers : demoMembers);
-      setTransactions(liveTransactions.length ? liveTransactions : demoTransactions);
-      setCurrentMemberId(liveMembers[0]?.id || currentMemberId);
-      setNotice('Live backend data loaded.');
+      const liveMembers = await apiFetch('/api/members', { token: authToken });
+      const liveTransactions = await apiFetch('/api/transactions', { token: authToken });
+      // Fetch user's profile to get current member context (assuming we could get this via an endpoint, 
+      // but here we just find the member matching our ID token. Actually, we don't have a /profile endpoint 
+      // in member.routes.js that returns current user. Let's just pick the first member if we don't know.)
+      setMembers(liveMembers || []);
+      setTransactions(liveTransactions || []);
+      
+      // Try to load loans based on role
+      try {
+        // Just load overdue for everyone to see (if they can)
+        const allLoansRes = await apiFetch('/api/loans/member/' + liveMembers[0]?.id, { token: authToken });
+        setLoans(Array.isArray(allLoansRes) ? allLoansRes : []);
+      } catch (e) {
+        // ignore
+      }
+      
+      if (!currentMember && liveMembers?.length > 0) {
+        // Fallback: pick the first member if we don't know who we are
+        setCurrentMember(liveMembers[0]);
+      }
     } catch (error) {
-      setNotice(error.message + '. Showing demo data.');
+      setNotice(error.message);
     } finally {
       setLoading(false);
     }
   }
 
-  function login() {
-    if (token) localStorage.setItem('chamaToken', token);
-    setScreen(role === 'MEMBER' ? 'member' : 'admin');
-    setNotice(role === 'MEMBER' ? 'Member demo session ready.' : 'Admin/Treasurer demo session ready.');
-    refreshData();
-  }
+  // Effect to load initial data if token exists
+  useEffect(() => {
+    if (token) {
+      // Decode token to get phone number to find member?
+      // Since Firebase auth might not map directly to member until we have a /profile endpoint,
+      // we'll let LoginScreen set the currentMember after successful login.
+      refreshData(token);
+    }
+  }, [token]);
 
   async function recordContribution(form) {
     const data = Object.fromEntries(new FormData(form));
     const body = { memberId: data.memberId, amount: data.amount, description: data.description || 'Member contribution payment' };
-    if (token) {
-      await apiFetch('/api/transactions/contributions', { token, method: 'POST', body });
-      await refreshData();
-      return 'Contribution recorded and backend sync requested.';
-    }
-    const target = members.find((member) => member.id === body.memberId);
-    setMembers((items) => items.map((member) => member.id === body.memberId ? { ...member, accountBalance: (Number(member.accountBalance) + Number(body.amount)).toFixed(2) } : member));
-    setTransactions((items) => [{ id: 'demo-' + Date.now(), memberId: body.memberId, groupId: target?.groupId || 'group-001', amount: Number(body.amount).toFixed(2), transactionType: 'CONTRIBUTION', description: body.description, timestamp: new Date().toISOString() }, ...items]);
-    return 'Contribution recorded in demo mode.';
+    await apiFetch('/api/transactions/contributions', { token, method: 'POST', body });
+    await refreshData();
+    return 'Contribution recorded.';
   }
 
-  async function requestLoan(form) {
+  async function requestLoanAction(form) {
     const data = Object.fromEntries(new FormData(form));
-    const body = { memberId: data.memberId, groupId: currentMember.groupId, principalAmount: data.principalAmount, interestRate: data.interestRate, dueDate: data.dueDate, description: data.description };
-    if (token) {
-      const loan = await apiFetch('/api/loans/request', { token, method: 'POST', body });
-      setLoans((items) => [loan, ...items]);
-      return 'Loan request submitted.';
-    }
-    const principal = Number(body.principalAmount);
-    const total = principal + principal * Number(body.interestRate);
-    setLoans((items) => [{ id: crypto.randomUUID(), ...body, totalRepayable: total.toFixed(2), amountPaid: '0.00', status: 'PENDING', approvedBy: null }, ...items]);
-    return 'Loan request added in demo mode.';
+    const body = { memberId: currentMember.id, groupId: currentMember.groupId, principalAmount: data.principalAmount, interestRate: data.interestRate, dueDate: data.dueDate, description: data.description };
+    await apiFetch('/api/loans/request', { token, method: 'POST', body });
+    await refreshData();
+    return 'Loan request submitted.';
   }
 
-  async function approveLoan(loanId) {
-    if (token) await apiFetch('/api/loans/' + loanId + '/approve', { token, method: 'PATCH' });
-    setLoans((items) => items.map((loan) => loan.id === loanId ? { ...loan, status: 'ACTIVE', approvedBy: currentMember.id } : loan));
-    setNotice('Loan approved.');
+  async function treasurerApproveLoan(loanId) {
+    await apiFetch('/api/loans/' + loanId + '/treasurer-approve', { token, method: 'PATCH' });
+    setNotice('Loan treasurer-approved.');
+    await refreshData();
+  }
+
+  async function adminApproveLoan(loanId) {
+    await apiFetch('/api/loans/' + loanId + '/admin-approve', { token, method: 'PATCH' });
+    setNotice('Loan fully approved and disbursed.');
+    await refreshData();
+  }
+  
+  async function rejectLoan(loanId, reason = 'Rejected') {
+    await apiFetch('/api/loans/' + loanId + '/reject', { token, method: 'PATCH', body: { reason } });
+    setNotice('Loan rejected.');
+    await refreshData();
   }
 
   async function recordRepayment(form) {
     const data = Object.fromEntries(new FormData(form));
-    if (token) {
-      await apiFetch('/api/loans/' + data.loanId + '/repay', { token, method: 'POST', body: { amount: data.amount, description: data.description } });
-      return 'Repayment recorded.';
-    }
-    setLoans((items) => items.map((loan) => loan.id === data.loanId ? { ...loan, amountPaid: (Number(loan.amountPaid) + Number(data.amount)).toFixed(2) } : loan));
-    return 'Repayment recorded in demo mode.';
+    await apiFetch('/api/loans/' + data.loanId + '/repay', { token, method: 'POST', body: { amount: data.amount, description: data.description } });
+    await refreshData();
+    return 'Repayment recorded.';
   }
 
   async function addMember(form) {
     const data = Object.fromEntries(new FormData(form));
-    const body = { groupId: 'group-001', fullName: data.fullName, phoneNumber: data.phoneNumber, email: data.email, role: data.role, accountBalance: data.accountBalance || '0.00' };
-    if (token) {
-      const member = await apiFetch('/api/members', { token, method: 'POST', body });
-      setMembers((items) => [member, ...items]);
-      return 'Member created.';
-    }
-    setMembers((items) => [{ id: crypto.randomUUID(), ...body }, ...items]);
-    return 'Member added in demo mode.';
+    const body = { groupId: currentMember?.groupId || 'group-001', fullName: data.fullName, phoneNumber: data.phoneNumber, email: data.email, role: data.role, accountBalance: data.accountBalance || '0.00' };
+    await apiFetch('/api/members', { token, method: 'POST', body });
+    await refreshData();
+    return 'Member created.';
   }
 
   async function sendSms(form) {
     const data = Object.fromEntries(new FormData(form));
-    if (token) {
-      await apiFetch('/api/notifications/sms/test', { token, method: 'POST', body: data });
-      return 'SMS test submitted.';
-    }
-    return 'SMS preview queued in demo mode.';
+    await apiFetch('/api/notifications/sms/test', { token, method: 'POST', body: data });
+    return 'SMS test submitted.';
   }
 
   const pendingLoans = loans.filter((loan) => loan.status === 'PENDING');
-  const memberLoans = loans.filter((loan) => loan.memberId === currentMember.id);
-  const memberTransactions = transactions.filter((tx) => tx.memberId === currentMember.id);
+  const treasurerApprovedLoans = loans.filter((loan) => loan.status === 'TREASURER_APPROVED');
+  const memberLoans = loans.filter((loan) => loan.memberId === currentMember?.id);
+  const memberTransactions = transactions.filter((tx) => tx.memberId === currentMember?.id);
 
-  return <main className="shell"><section className="phone-frame">
-    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} role={role} setRole={setRole} token={token} setToken={setToken} login={login} /> : <>
-      <TopBar screen={screen} role={role} setRole={setRole} setScreen={setScreen} currentMember={currentMember} loading={loading} />
+  if (!currentMember && screen !== 'login') {
+    return <div className="shell">Loading member profile...</div>;
+  }
+
+  return <main className="shell">
+    {!isOnline && <div style={{background: 'red', color: 'white', textAlign: 'center', padding: '4px'}}>You are currently offline</div>}
+    
+    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} setToken={setToken} setScreen={setScreen} setCurrentMember={setCurrentMember} /> : <>
+      <TopBar screen={screen} role={role} setScreen={setScreen} currentMember={currentMember} loading={loading} />
       <nav className="tabs">{navItems.filter((item) => item.roles.includes(role)).map((item) => <button key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}>{item.label}</button>)}</nav>
       {notice && <div className="notice">{notice}</div>}
-      {screen === 'member' && <MemberDashboard member={currentMember} members={members} setCurrentMemberId={setCurrentMemberId} transactions={memberTransactions} allTransactions={transactions} loans={memberLoans} />}
-      {screen === 'admin' && <AdminPanel members={members} pendingLoans={pendingLoans} approveLoan={approveLoan} go={setScreen} />}
-      {screen === 'recordContribution' && <FormScreen title="Record Contribution" onBack={() => setScreen('admin')} onSubmit={recordContribution} successText="Confirmation message will appear here"><MemberSelect members={members} /><label>Contribution Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="5000" /></label><label>Date<input name="date" defaultValue="05/06/2026" /></label><label>Description<input name="description" defaultValue="Monthly contribution" /></label></FormScreen>}
-      {screen === 'requestLoan' && <FormScreen title="Request Loan" onBack={() => setScreen('member')} onSubmit={requestLoan} successText="Loan request status will appear here"><MemberSelect members={members} currentMemberId={currentMember.id} /><label>Principal Amount (KSH)<input name="principalAmount" defaultValue="10000" /></label><label>Interest Rate<input name="interestRate" defaultValue="0.10" /></label><label>Due Date<input name="dueDate" type="date" defaultValue="2026-07-15" /></label><label>Description<input name="description" defaultValue="Emergency loan request" /></label></FormScreen>}
-      {screen === 'repayment' && <RepaymentScreen loans={loans} members={members} onSubmit={recordRepayment} onBack={() => setScreen('admin')} />}
+      
+      {screen === 'member' && <MemberDashboard member={currentMember} transactions={memberTransactions} allTransactions={transactions} loans={memberLoans} members={members} />}
+      
+      {screen === 'treasurer' && <TreasurerPanel members={members} pendingLoans={pendingLoans} approveLoan={treasurerApproveLoan} rejectLoan={rejectLoan} go={setScreen} />}
+      
+      {screen === 'admin' && <AdminPanel members={members} treasurerApprovedLoans={treasurerApprovedLoans} approveLoan={adminApproveLoan} rejectLoan={rejectLoan} go={setScreen} />}
+      
+      {screen === 'recordContribution' && <FormScreen title="Record Contribution" onBack={() => setScreen('treasurer')} onSubmit={recordContribution} successText="Confirmation message will appear here"><MemberSelect members={members} /><label>Contribution Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="5000" /></label><label>Date<input name="date" defaultValue={new Date().toISOString().slice(0, 10)} /></label><label>Description<input name="description" defaultValue="Monthly contribution" /></label></FormScreen>}
+      
+      {screen === 'requestLoan' && <FormScreen title="Request Loan" onBack={() => setScreen('member')} onSubmit={requestLoanAction} successText="Loan request status will appear here"><label>Principal Amount (KSH)<input name="principalAmount" defaultValue="10000" /></label><label>Interest Rate<input name="interestRate" defaultValue="0.10" /></label><label>Due Date<input name="dueDate" type="date" defaultValue="2026-07-15" /></label><label>Description<input name="description" defaultValue="Emergency loan request" /></label></FormScreen>}
+      
+      {screen === 'repayment' && <RepaymentScreen loans={loans} members={members} onSubmit={recordRepayment} onBack={() => setScreen('treasurer')} />}
+      
       {screen === 'members' && <MembersScreen members={members} addMember={addMember} />}
+      
       {screen === 'ledger' && <LedgerScreen members={members} transactions={transactions} loans={loans} />}
+      
       {screen === 'sms' && <SmsScreen members={members} sendSms={sendSms} />}
     </>}
-  </section></main>;
+  </main>;
 }
 
-function LoginScreen({ language, setLanguage, role, setRole, token, setToken, login }) {
+function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMember }) {
+  const [phoneNumber, setPhoneNumber] = useState('+254');
+  const [verificationId, setVerificationId] = useState('');
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!window.recaptchaVerifier) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        size: 'invisible'
+      });
+    }
+  }, []);
+
+  async function handleSendOtp() {
+    setLoading(true);
+    setError('');
+    try {
+      const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, window.recaptchaVerifier);
+      window.confirmationResult = confirmationResult;
+      setVerificationId(confirmationResult.verificationId);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyOtp() {
+    setLoading(true);
+    setError('');
+    let firebaseUser = null;
+    
+    // Step 1: Verify the OTP with Firebase (isolated so error message is accurate)
+    try {
+      const result = await window.confirmationResult.confirm(code);
+      firebaseUser = result.user;
+    } catch (e) {
+      setError('Incorrect verification code. Please try again.');
+      setLoading(false);
+      return;
+    }
+
+    // Step 2: Exchange Firebase token for a backend session
+    try {
+      const token = await firebaseUser.getIdToken();
+      setToken(token);
+      localStorage.setItem('chamaToken', token);
+      
+      // Fetch members and find the one matching this phone number
+      const members = await apiFetch('/api/members', { token });
+      const me = members.find(m => m.phoneNumber === firebaseUser.phoneNumber);
+      
+      if (me) {
+        setCurrentMember(me);
+        setScreen(me.role === 'MEMBER' ? 'member' : (me.role === 'TREASURER' ? 'treasurer' : 'admin'));
+      } else {
+        // Firebase OTP passed but this number isn't a registered member
+        setError('Your number is not registered as a member. Please ask your group Admin to add you.');
+        // Sign out from Firebase to avoid a stale session
+        await auth.signOut();
+      }
+    } catch (e) {
+      setError('Login succeeded but could not reach the server: ' + e.message + '. Make sure the backend is running and your phone is on the same WiFi as your PC.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return <div className="login-screen">
     <div className="language-row"><button className={language === 'ENG' ? 'solid' : ''} onClick={() => setLanguage('ENG')}>ENG</button><button className={language === 'SWA' ? 'solid' : ''} onClick={() => setLanguage('SWA')}>SWA</button></div>
     <section className="brand-box"><div className="brand-mark">CH</div><p>CHAMA HUB</p></section>
-    <label>Phone Number<input placeholder="+254 000 000 000" /></label>
-    <label>Firebase idToken<input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Optional for live backend access" /></label>
-    <label>4-Digit Verification Code<div className="code-row"><input maxLength="1" /><input maxLength="1" /><input maxLength="1" /><input maxLength="1" /></div></label>
-    <div className="role-box"><p>Demo: Select User Role</p><button className={role === 'MEMBER' ? 'solid' : ''} onClick={() => setRole('MEMBER')}>Member</button><button className={role !== 'MEMBER' ? 'solid' : ''} onClick={() => setRole('TREASURER')}>Admin/Treasurer</button></div>
-    <button className="primary bottom-action" onClick={login}>Verify & Login</button>
+    
+    <div id="recaptcha-container"></div>
+    
+    {!verificationId ? (
+      <>
+        <label>Phone Number<input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+254 000 000 000" /></label>
+        <button className="primary bottom-action" onClick={handleSendOtp} disabled={loading}>{loading ? 'Sending OTP...' : 'Send Login Code'}</button>
+      </>
+    ) : (
+      <>
+        <label>6-Digit Verification Code<input value={code} onChange={e => setCode(e.target.value)} maxLength="6" placeholder="123456" /></label>
+        <button className="primary bottom-action" onClick={handleVerifyOtp} disabled={loading}>{loading ? 'Verifying...' : 'Verify & Login'}</button>
+      </>
+    )}
+    
+    {error && <div style={{color: 'red', marginTop: 10}}>{error}</div>}
   </div>;
 }
 
-function TopBar({ screen, role, setRole, setScreen, currentMember, loading }) {
-  const titles = { member: 'Chama System', admin: 'Admin Panel', recordContribution: 'Record Contribution', requestLoan: 'Request Loan', repayment: 'Record Repayment', members: 'Members', ledger: 'Shared Ledger', sms: 'SMS Test' };
-  return <header className="topbar">{screen !== 'member' && <button className="icon-button" onClick={() => setScreen(role === 'MEMBER' ? 'member' : 'admin')}>{'<-'}</button>}<strong>{titles[screen] || 'Chama System'}</strong><div className="top-actions">{loading && <span className="tiny">Sync</span>}<select value={role} onChange={(event) => setRole(event.target.value)}><option value="MEMBER">Member</option><option value="TREASURER">Treasurer</option><option value="ADMIN">Admin</option></select><span className="avatar">{currentMember.fullName.slice(0, 1)}</span></div></header>;
+function TopBar({ screen, role, setScreen, currentMember, loading }) {
+  const titles = { member: 'Chama System', admin: 'Admin Panel', treasurer: 'Treasurer Panel', recordContribution: 'Record Contribution', requestLoan: 'Request Loan', repayment: 'Record Repayment', members: 'Members', ledger: 'Shared Ledger', sms: 'SMS Test' };
+  
+  function getHome() {
+    if (role === 'ADMIN') return 'admin';
+    if (role === 'TREASURER') return 'treasurer';
+    return 'member';
+  }
+  
+  return <header className="topbar">
+    {screen !== getHome() && screen !== 'member' && <button className="icon-button" onClick={() => setScreen(getHome())}>{'<-'}</button>}
+    <strong>{titles[screen] || 'Chama System'}</strong>
+    <div className="top-actions">
+      {loading && <span className="tiny">Sync</span>}
+      <span className="avatar">{currentMember?.fullName?.slice(0, 1)}</span>
+    </div>
+  </header>;
 }
 
-function MemberDashboard({ member, members, setCurrentMemberId, transactions, allTransactions, loans }) {
+function MemberDashboard({ member, transactions, allTransactions, loans, members }) {
   const activeLoan = loans.find((loan) => ['ACTIVE', 'OVERDUE'].includes(loan.status));
   const totalContributions = transactions.filter((tx) => tx.transactionType === 'CONTRIBUTION').reduce((sum, tx) => sum + Number(tx.amount), 0);
-  return <div className="screen-stack"><select className="member-switcher" value={member.id} onChange={(event) => setCurrentMemberId(event.target.value)}>{members.map((item) => <option key={item.id} value={item.id}>{item.fullName}</option>)}</select><section className="wire-card"><p className="eyebrow">Personal Balance</p><h1>{money(member.accountBalance)}</h1><div className="line" /><p>Total Contributions: {money(totalContributions)}</p></section><section className="wire-card two-col"><div><p className="eyebrow">Outstanding Loans</p><strong>{activeLoan ? activeLoan.status : 'None'}</strong><p>Due Date</p></div><div className="right"><p>{activeLoan ? money(Number(activeLoan.totalRepayable) - Number(activeLoan.amountPaid)) : 'KSH 0'}</p><p>{activeLoan ? activeLoan.dueDate : '-'}</p></div></section><section className="wire-card"><p className="eyebrow strong">Shared Ledger Activity</p>{allTransactions.slice(0, 5).map((tx) => <LedgerRow key={tx.id} name={getMemberName(members, tx.memberId)} type={tx.transactionType} amount={tx.amount} />)}</section></div>;
+  return <div className="screen-stack">
+    <section className="wire-card">
+      <p className="eyebrow">Personal Balance</p>
+      <h1>{money(member.accountBalance)}</h1>
+      <div className="line" />
+      <p>Total Contributions: {money(totalContributions)}</p>
+    </section>
+    <section className="wire-card two-col">
+      <div>
+        <p className="eyebrow">Outstanding Loans</p>
+        <strong>{activeLoan ? activeLoan.status : 'None'}</strong>
+        <p>Due Date</p>
+      </div>
+      <div className="right">
+        <p>{activeLoan ? money(Number(activeLoan.totalRepayable) - Number(activeLoan.amountPaid)) : 'KSH 0'}</p>
+        <p>{activeLoan ? activeLoan.dueDate : '-'}</p>
+      </div>
+    </section>
+    <section className="wire-card">
+      <p className="eyebrow strong">Shared Ledger Activity</p>
+      {allTransactions.slice(0, 5).map((tx) => <LedgerRow key={tx.id} name={getMemberName(members, tx.memberId)} type={tx.transactionType} amount={tx.amount} />)}
+    </section>
+  </div>;
 }
 
-function AdminPanel({ members, pendingLoans, approveLoan, go }) {
-  return <div className="screen-stack"><div className="clearance">Treasurer Clearance Active</div><div className="action-grid"><ActionTile icon="+" label="Record Contribution" onClick={() => go('recordContribution')} /><ActionTile icon="/" label="Approve Loan" onClick={() => go('ledger')} /><ActionTile icon="!" label="Trigger Penalty Sweep" onClick={() => go('ledger')} /><ActionTile icon="=" label="Compile Financial Report" onClick={() => go('ledger')} /><ActionTile icon="R" label="Record Repayment" onClick={() => go('repayment')} /><ActionTile icon="S" label="Test SMS" onClick={() => go('sms')} /></div><section className="wire-card"><p className="eyebrow strong">Pending Approvals Queue</p>{pendingLoans.length === 0 && <p>No pending loan approvals.</p>}{pendingLoans.map((loan) => <div className="queue-row" key={loan.id}><div><strong>{getMemberName(members, loan.memberId)}</strong><p>Loan Request</p></div><div className="right"><p>{money(loan.principalAmount)}</p><button onClick={() => approveLoan(loan.id)}>Review</button></div></div>)}</section></div>;
+function TreasurerPanel({ members, pendingLoans, approveLoan, rejectLoan, go }) {
+  return <div className="screen-stack">
+    <div className="action-grid">
+      <ActionTile icon="+" label="Record Contribution" onClick={() => go('recordContribution')} />
+      <ActionTile icon="R" label="Record Repayment" onClick={() => go('repayment')} />
+      <ActionTile icon="!" label="Apply Penalty" onClick={() => {}} />
+      <ActionTile icon="=" label="Reports" onClick={() => {}} />
+    </div>
+    <section className="wire-card">
+      <p className="eyebrow strong">Pending Loans (Treasurer Initial Approval)</p>
+      {pendingLoans.length === 0 && <p>No pending loan requests.</p>}
+      {pendingLoans.map((loan) => <div className="queue-row" key={loan.id}>
+        <div><strong>{getMemberName(members, loan.memberId)}</strong><p>{money(loan.principalAmount)}</p></div>
+        <div className="right">
+          <button onClick={() => approveLoan(loan.id)}>Approve</button>
+          <button style={{background: 'var(--danger)', color: 'white', marginTop: 4}} onClick={() => rejectLoan(loan.id)}>Reject</button>
+        </div>
+      </div>)}
+    </section>
+  </div>;
+}
+
+function AdminPanel({ members, treasurerApprovedLoans, approveLoan, rejectLoan, go }) {
+  return <div className="screen-stack">
+    <div className="action-grid">
+      <ActionTile icon="U" label="Manage Members" onClick={() => go('members')} />
+      <ActionTile icon="S" label="Test SMS" onClick={() => go('sms')} />
+    </div>
+    <section className="wire-card">
+      <p className="eyebrow strong">Treasurer Approved Loans (Final Approval)</p>
+      {treasurerApprovedLoans.length === 0 && <p>No loans awaiting final approval.</p>}
+      {treasurerApprovedLoans.map((loan) => <div className="queue-row" key={loan.id}>
+        <div><strong>{getMemberName(members, loan.memberId)}</strong><p>{money(loan.principalAmount)}</p></div>
+        <div className="right">
+          <button onClick={() => approveLoan(loan.id)}>Approve</button>
+          <button style={{background: 'var(--danger)', color: 'white', marginTop: 4}} onClick={() => rejectLoan(loan.id)}>Reject</button>
+        </div>
+      </div>)}
+    </section>
+  </div>;
 }
 
 function ActionTile({ icon, label, onClick }) {

@@ -1,12 +1,9 @@
 // src/routes/loan.routes.js
 //
 // Express Router for the Loan module.
-// Wiring pattern mirrors partner's transaction.routes.js:
-//   verifyFirebaseToken → validateRequest(schema) → asyncHandler(controller)
-//
-// To activate in the app, add to src/app.js:
-//   const loanRoutes = require('./routes/loan.routes');
-//   app.use('/api/loans', loanRoutes);
+// Implements two-stage loan approval (BR-005):
+//   Stage 1: Treasurer initial approval (PENDING → TREASURER_APPROVED)
+//   Stage 2: Admin final approval (TREASURER_APPROVED → ACTIVE + disbursement)
 
 'use strict';
 
@@ -14,10 +11,13 @@ const router             = require('express').Router();
 const loanController     = require('../controllers/loan.controller');
 const { asyncHandler }   = require('../utils/asyncHandler');
 const { verifyFirebaseToken } = require('../middleware/firebaseAuth');
+const { requireRole }    = require('../middleware/requireRole');
 const { validateRequest } = require('../middleware/validateRequest');
 const {
   requestLoanSchema,
-  approveLoanSchema,
+  treasurerApproveLoanSchema,
+  adminApproveLoanSchema,
+  rejectLoanSchema,
   repayLoanSchema,
   overdueLoansSchema,
   getLoanByIdSchema,
@@ -28,6 +28,7 @@ router.use(verifyFirebaseToken);
 
 // ─── POST /api/loans/request ──────────────────────────────────────────────────
 // BR-004: Any authenticated member may submit a loan request.
+// If the requester is the Treasurer, status is auto-set to TREASURER_APPROVED.
 router.post(
   '/request',
   validateRequest(requestLoanSchema),
@@ -49,18 +50,39 @@ router.get(
   asyncHandler(loanController.getLoansByMember)
 );
 
-// ─── PATCH /api/loans/:id/approve ────────────────────────────────────────────
-// BR-005: ADMIN or TREASURER only. Validates Loan UUID in params.
+// ─── PATCH /api/loans/:id/treasurer-approve ──────────────────────────────────
+// BR-005 Stage 1: Treasurer initial approval (PENDING → TREASURER_APPROVED).
 router.patch(
-  '/:id/approve',
-  validateRequest(approveLoanSchema),
-  asyncHandler(loanController.approveLoan)
+  '/:id/treasurer-approve',
+  requireRole('TREASURER'),
+  validateRequest(treasurerApproveLoanSchema),
+  asyncHandler(loanController.treasurerApproveLoan)
+);
+
+// ─── PATCH /api/loans/:id/admin-approve ──────────────────────────────────────
+// BR-005 Stage 2: Admin final approval (TREASURER_APPROVED → ACTIVE).
+// Triggers disbursement transaction + SMS notification.
+router.patch(
+  '/:id/admin-approve',
+  requireRole('ADMIN'),
+  validateRequest(adminApproveLoanSchema),
+  asyncHandler(loanController.adminApproveLoan)
+);
+
+// ─── PATCH /api/loans/:id/reject ─────────────────────────────────────────────
+// Treasurer rejects PENDING loans; Admin rejects TREASURER_APPROVED loans.
+router.patch(
+  '/:id/reject',
+  requireRole('TREASURER', 'ADMIN'),
+  validateRequest(rejectLoanSchema),
+  asyncHandler(loanController.rejectLoan)
 );
 
 // ─── POST /api/loans/:id/repay ────────────────────────────────────────────────
-// Record a LOAN_REPAYMENT transaction (append-only, BR-002).
+// Record a LOAN_REPAYMENT transaction (append-only, BR-002). Treasurer only.
 router.post(
   '/:id/repay',
+  requireRole('TREASURER'),
   validateRequest(repayLoanSchema),
   asyncHandler(loanController.recordRepayment)
 );
@@ -74,3 +96,4 @@ router.get(
 );
 
 module.exports = router;
+

@@ -1,10 +1,9 @@
 // src/controllers/loan.controller.js
 //
 // Thin Express route handlers — all business logic lives in loan.service.js.
-// Follows the same controller pattern as the partner's transaction.controller.js:
-//   - Read validated input from req.validated (set by validateRequest middleware)
-//   - Delegate to the service
-//   - Return a consistent { success, message, data } envelope
+// Implements two-stage loan approval (BR-005):
+//   Stage 1: Treasurer initial approval (PENDING → TREASURER_APPROVED)
+//   Stage 2: Admin final approval (TREASURER_APPROVED → ACTIVE + disbursement)
 
 'use strict';
 
@@ -12,6 +11,7 @@ const loanService = require('../services/loan.service');
 
 // ─── POST /api/loans/request ──────────────────────────────────────────────────
 // BR-004: Any authenticated member may submit a loan request.
+// Treasurer's own requests auto-advance to TREASURER_APPROVED.
 
 async function requestLoan(req, res) {
   const result = await loanService.requestLoan(req.validated.body, req.user);
@@ -22,20 +22,45 @@ async function requestLoan(req, res) {
   });
 }
 
-// ─── PATCH /api/loans/:id/approve ────────────────────────────────────────────
-// BR-005: ADMIN or TREASURER only.
+// ─── PATCH /api/loans/:id/treasurer-approve ──────────────────────────────────
+// BR-005 Stage 1: Treasurer approves PENDING → TREASURER_APPROVED.
 
-async function approveLoan(req, res) {
-  const result = await loanService.approveLoan(req.validated.params, req.user);
+async function treasurerApproveLoan(req, res) {
+  const result = await loanService.treasurerApproveLoan(req.validated.params, req.user);
   res.status(200).json({
     success: true,
-    message: 'Loan approved. Disbursement transaction recorded and SMS notification triggered.',
+    message: result.message,
+    data:    result.loan,
+  });
+}
+
+// ─── PATCH /api/loans/:id/admin-approve ──────────────────────────────────────
+// BR-005 Stage 2: Admin approves TREASURER_APPROVED → ACTIVE + disbursement.
+
+async function adminApproveLoan(req, res) {
+  const result = await loanService.adminApproveLoan(req.validated.params, req.user);
+  res.status(200).json({
+    success: true,
+    message: 'Loan approved by Admin. Disbursement transaction recorded and SMS notification triggered.',
     data:    result,
   });
 }
 
+// ─── PATCH /api/loans/:id/reject ─────────────────────────────────────────────
+// Treasurer rejects PENDING; Admin rejects TREASURER_APPROVED.
+
+async function rejectLoan(req, res) {
+  const body = req.validated?.body || {};
+  const result = await loanService.rejectLoan(req.validated.params, body, req.user);
+  res.status(200).json({
+    success: true,
+    message: result.message,
+    data:    result.loan,
+  });
+}
+
 // ─── POST /api/loans/:id/repay ────────────────────────────────────────────────
-// ADMIN or TREASURER records a dynamic repayment.
+// Treasurer records a dynamic repayment.
 
 async function recordRepayment(req, res) {
   const result = await loanService.recordRepayment(
@@ -52,7 +77,6 @@ async function recordRepayment(req, res) {
 
 // ─── GET /api/loans/overdue ───────────────────────────────────────────────────
 // BR-007: Sweep for loans past dueDate with amountPaid < totalRepayable.
-// Also transitions ACTIVE → OVERDUE in-place.
 
 async function getOverdueLoans(req, res) {
   const result = await loanService.getOverdueLoans(req.validated.query, req.user);
@@ -84,9 +108,12 @@ async function getLoansByMember(req, res) {
 
 module.exports = {
   requestLoan,
-  approveLoan,
+  treasurerApproveLoan,
+  adminApproveLoan,
+  rejectLoan,
   recordRepayment,
   getOverdueLoans,
   getLoanById,
   getLoansByMember,
 };
+

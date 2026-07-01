@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Explicitly allow cleartext HTTP traffic to local development hosts.
+  Without this, the Android WebView blocks non-HTTPS requests even when
+  android:usesCleartextTraffic="true" is set at the application level.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- The PC's LAN IP during local development -->
+        <domain includeSubdomains="false">192.168.100.33</domain>
+        <!-- Android emulator host alias -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- Standard localhost -->
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

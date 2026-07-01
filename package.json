@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\"",
     "db:init": "node initDatabase.js"
   },
   "dependencies": {
@@ -21,6 +23,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "concurrently": "^10.0.3",
     "nodemon": "^3.1.9"
   }
 }

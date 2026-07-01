@@ -13,8 +13,22 @@ const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 function createApp() {
   const app = express();
 
-  app.use(helmet());
-  app.use(cors());
+  // Relax helmet's cross-origin policies so the Capacitor WebView
+  // (origin http://localhost) can read responses from the backend.
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: false
+  }));
+
+  // Explicitly configure CORS: reflect the requesting origin, allow
+  // the Authorization header, and handle preflight OPTIONS requests.
+  app.use(cors({
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }));
+
   app.use(express.json({ limit: '1mb' }));
   app.use(morgan('dev'));
 

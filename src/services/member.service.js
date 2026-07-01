@@ -35,6 +35,19 @@ function getAllMembers() {
 }
 
 function createMember(input) {
+  // Enforce one ADMIN and one TREASURER per group (Blueprint §2 Role Constraints)
+  if (input.role === 'ADMIN' || input.role === 'TREASURER') {
+    const existing = db.prepare(
+      'SELECT id, fullName FROM "Member" WHERE groupId = ? AND role = ?'
+    ).get(input.groupId, input.role);
+    if (existing) {
+      throw new AppError(
+        `Group already has a ${input.role}: ${existing.fullName}. A chama can only have one ${input.role}.`,
+        409
+      );
+    }
+  }
+
   const createdAt = now();
   const member = {
     id: randomUUID(),

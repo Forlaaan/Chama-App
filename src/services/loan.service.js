@@ -1,6 +1,6 @@
 // src/services/loan.service.js
 //
-// Implements BR-004 (Loan Requests), BR-005 (Loan Approval),
+// Implements BR-004 (Loan Requests), BR-005 (Two-Stage Loan Approval),
 // BR-006 (Interest Calculation — provisional formula), and
 // BR-007 (Overdue Detection).
 //
@@ -9,8 +9,9 @@
 //
 // Audit: HMAC-SHA-256 via auditSignature() — agreed replacement for SHA-256 hash.
 //
-// Roles: ADMIN and TREASURER are both authorised for approval / repayment.
-// MEMBER may only request loans (BR-004).
+// Two-stage approval flow:
+//   PENDING → [Treasurer] → TREASURER_APPROVED → [Admin] → ACTIVE
+// Special: Treasurer's own loan requests auto-set to TREASURER_APPROVED.
 
 'use strict';
 
@@ -28,14 +29,16 @@ function now() {
   return new Date().toISOString();
 }
 
-/** Roles that may approve / repay / read all loans */
-const PRIVILEGED_ROLES = new Set(['ADMIN', 'TREASURER']);
-
-function requirePrivileged(actor) {
-  if (!PRIVILEGED_ROLES.has(actor.role)) {
+/**
+ * Require the actor to have a specific role.
+ * Role checking is now also enforced at the middleware layer (requireRole),
+ * but service-level checks provide defense-in-depth.
+ */
+function requireActorRole(actor, ...allowedRoles) {
+  if (!allowedRoles.includes(actor.role)) {
     throw new AppError(
       `Role '${actor.role}' is not authorised for this loan operation. ` +
-      'Requires ADMIN or TREASURER.',
+      `Requires: ${allowedRoles.join(' or ')}.`,
       403
     );
   }
@@ -145,7 +148,10 @@ function insertTransaction({ memberId, groupId, loanId, amount, transactionType,
 
 /**
  * Submit a new loan application. Any authenticated member may call this.
- * Status is ALWAYS initialised to PENDING (BR-004).
+ *
+ * Status is initialised to PENDING (BR-004), UNLESS the requester is the
+ * Treasurer — in which case the status is automatically set to
+ * TREASURER_APPROVED (bypasses their own initial approval step).
  *
  * BR-006 provisional formula: totalRepayable = principal + (principal × interestRate)
  *
@@ -169,6 +175,10 @@ function requestLoan(body, authUser) {
   const totalRepayable   = fromCents(principalCents + interestCents);
   const principalAmount  = fromCents(principalCents);
 
+  // Treasurer's own loan requests auto-advance to TREASURER_APPROVED
+  const isTreasurerSelfRequest = actor.role === 'TREASURER';
+  const initialStatus = isTreasurerSelfRequest ? 'TREASURER_APPROVED' : 'PENDING';
+
   const loanId    = randomUUID();
   const createdAt = now();
 
@@ -181,7 +191,7 @@ function requestLoan(body, authUser) {
     totalRepayable,
     amountPaid:     '0.00',
     dueDate:        body.dueDate,
-    status:         'PENDING',
+    status:         initialStatus,
     approvedBy:     null,
     createdAt,
     updatedAt:      createdAt,
@@ -190,29 +200,28 @@ function requestLoan(body, authUser) {
 
   insertLoan(loan);
 
+  const message = isTreasurerSelfRequest
+    ? 'Loan request submitted by Treasurer. Status: TREASURER_APPROVED. Awaiting Admin final approval.'
+    : 'Loan request submitted. Status: PENDING. Awaiting Treasurer initial approval (BR-004).';
+
   return {
     loan: normalizeLoan(loan),
-    message:
-      'Loan request submitted. Status: PENDING. Awaiting ADMIN or TREASURER approval (BR-004).',
+    message,
   };
 }
 
-// ─── BR-005: Loan Approval ────────────────────────────────────────────────────
+// ─── BR-005 Stage 1: Treasurer Initial Approval ──────────────────────────────
 
 /**
- * Approve a PENDING loan. Restricted to ADMIN or TREASURER.
+ * Treasurer approves a PENDING loan → TREASURER_APPROVED.
+ * No disbursement or SMS at this stage — the loan moves to Admin's queue.
  *
- * Steps (BR-005):
- *  1. Verify actor role.
- *  2. Validate loan exists and is PENDING.
- *  3. Set status → ACTIVE, record approvedBy.
- *  4. Insert append-only LOAN_DISBURSEMENT transaction (BR-002).
- *  5. Update member accountBalance += principalAmount.
- *  6. Queue SMS notification via NotificationService.
+ * @param {object} params   Validated params { id }
+ * @param {object} authUser req.user
  */
-async function approveLoan(params, authUser) {
+function treasurerApproveLoan(params, authUser) {
   const actor = requireLinkedMember(authUser);
-  requirePrivileged(actor);
+  requireActorRole(actor, 'TREASURER');
 
   const loanRow = getLoanRowById(params.id);
   if (!loanRow) {
@@ -220,7 +229,57 @@ async function approveLoan(params, authUser) {
   }
   if (loanRow.status !== 'PENDING') {
     throw new AppError(
-      `Only PENDING loans can be approved. Current status: ${loanRow.status}`,
+      `Only PENDING loans can be treasurer-approved. Current status: ${loanRow.status}`,
+      409
+    );
+  }
+
+  const updatedAt = now();
+  const updatedLoan = {
+    ...loanRow,
+    status:     'TREASURER_APPROVED',
+    updatedAt,
+  };
+  updatedLoan.auditSignature = auditSignature(updatedLoan);
+
+  updateLoanStatus(loanRow.id, {
+    status:     'TREASURER_APPROVED',
+    approvedBy: loanRow.approvedBy,
+    amountPaid: loanRow.amountPaid,
+    updatedAt,
+    auditSig:   updatedLoan.auditSignature,
+  });
+
+  return {
+    loan: normalizeLoan(updatedLoan),
+    message: 'Loan treasurer-approved. Status: TREASURER_APPROVED. Awaiting Admin final approval.',
+  };
+}
+
+// ─── BR-005 Stage 2: Admin Final Approval ─────────────────────────────────────
+
+/**
+ * Admin gives final approval to a TREASURER_APPROVED loan → ACTIVE.
+ *
+ * Steps (BR-005 Stage 2):
+ *  1. Verify actor role (ADMIN).
+ *  2. Validate loan exists and is TREASURER_APPROVED.
+ *  3. Set status → ACTIVE, record approvedBy.
+ *  4. Insert append-only LOAN_DISBURSEMENT transaction (BR-002).
+ *  5. Update member accountBalance += principalAmount.
+ *  6. Queue SMS notification via NotificationService.
+ */
+async function adminApproveLoan(params, authUser) {
+  const actor = requireLinkedMember(authUser);
+  requireActorRole(actor, 'ADMIN');
+
+  const loanRow = getLoanRowById(params.id);
+  if (!loanRow) {
+    throw new AppError(`Loan not found: ${params.id}`, 404);
+  }
+  if (loanRow.status !== 'TREASURER_APPROVED') {
+    throw new AppError(
+      `Only TREASURER_APPROVED loans can receive admin final approval. Current status: ${loanRow.status}`,
       409
     );
   }
@@ -230,7 +289,6 @@ async function approveLoan(params, authUser) {
 
   // Wrap approval + tx insert + balance update in a single SQLite transaction
   const approve = db.transaction(() => {
-    // 3. Update Loan status
     const updatedLoan = {
       ...loanRow,
       status:     'ACTIVE',
@@ -247,7 +305,7 @@ async function approveLoan(params, authUser) {
       auditSig:   updatedLoan.auditSignature,
     });
 
-    // 4. Append LOAN_DISBURSEMENT transaction (BR-002 — immutable)
+    // Append LOAN_DISBURSEMENT transaction (BR-002 — immutable)
     const disbursementTx = insertTransaction({
       memberId:        loanRow.memberId,
       groupId:         loanRow.groupId,
@@ -258,7 +316,7 @@ async function approveLoan(params, authUser) {
       actorId:         actor.id,
     });
 
-    // 5. Update member balance
+    // Update member balance
     const newBalance = addMoney(member.accountBalance, loanRow.principalAmount);
     db.prepare(`
       UPDATE "Member"
@@ -277,7 +335,7 @@ async function approveLoan(params, authUser) {
 
   const { updatedLoan, disbursementTx, newBalance } = approve();
 
-  // 6. Queue SMS — outside the SQLite transaction (network call, can fail gracefully)
+  // Queue SMS — outside the SQLite transaction (network call, can fail gracefully)
   const smsMessage =
     `Dear ${member.fullName}, your loan of KES ${loanRow.principalAmount} has been approved. ` +
     `Total repayable: KES ${loanRow.totalRepayable}. Due date: ${loanRow.dueDate}. ` +
@@ -293,7 +351,6 @@ async function approveLoan(params, authUser) {
       actorId:     actor.id,
     });
   } catch (smsErr) {
-    // SMS failure must not roll back an approved loan (audit trail preserved)
     console.error('[loan.service] SMS queue error after approval:', smsErr.message);
     notificationResult = { status: 'SMS_QUEUE_FAILED', error: smsErr.message };
   }
@@ -306,13 +363,73 @@ async function approveLoan(params, authUser) {
   };
 }
 
+// ─── Loan Rejection ───────────────────────────────────────────────────────────
+
+/**
+ * Reject a loan.
+ * - Treasurer can reject PENDING loans.
+ * - Admin can reject TREASURER_APPROVED loans.
+ *
+ * @param {object} params   Validated params { id }
+ * @param {object} body     Optional { reason }
+ * @param {object} authUser req.user
+ */
+function rejectLoan(params, body, authUser) {
+  const actor = requireLinkedMember(authUser);
+  requireActorRole(actor, 'TREASURER', 'ADMIN');
+
+  const loanRow = getLoanRowById(params.id);
+  if (!loanRow) {
+    throw new AppError(`Loan not found: ${params.id}`, 404);
+  }
+
+  // Treasurer can only reject PENDING loans
+  if (actor.role === 'TREASURER' && loanRow.status !== 'PENDING') {
+    throw new AppError(
+      `Treasurer can only reject PENDING loans. Current status: ${loanRow.status}`,
+      409
+    );
+  }
+
+  // Admin can only reject TREASURER_APPROVED loans
+  if (actor.role === 'ADMIN' && loanRow.status !== 'TREASURER_APPROVED') {
+    throw new AppError(
+      `Admin can only reject TREASURER_APPROVED loans. Current status: ${loanRow.status}`,
+      409
+    );
+  }
+
+  const updatedAt = now();
+  const updatedLoan = {
+    ...loanRow,
+    status:     'REJECTED',
+    updatedAt,
+  };
+  updatedLoan.auditSignature = auditSignature(updatedLoan);
+
+  updateLoanStatus(loanRow.id, {
+    status:     'REJECTED',
+    approvedBy: loanRow.approvedBy,
+    amountPaid: loanRow.amountPaid,
+    updatedAt,
+    auditSig:   updatedLoan.auditSignature,
+  });
+
+  const reason = body?.reason || 'No reason provided';
+
+  return {
+    loan: normalizeLoan(updatedLoan),
+    message: `Loan rejected by ${actor.role}. Reason: ${reason}`,
+  };
+}
+
 // ─── Loan Repayment ───────────────────────────────────────────────────────────
 
 /**
- * Record a loan repayment by ADMIN or TREASURER.
+ * Record a loan repayment by TREASURER.
  *
  * Steps:
- *  1. Verify actor role (ADMIN or TREASURER).
+ *  1. Verify actor role (TREASURER).
  *  2. Validate loan exists and is ACTIVE (cannot repay PENDING / PAID / REJECTED).
  *  3. Validate repayment amount does not exceed outstanding balance.
  *  4. Insert append-only LOAN_REPAYMENT transaction.
@@ -321,7 +438,7 @@ async function approveLoan(params, authUser) {
  */
 function recordRepayment(params, body, authUser) {
   const actor = requireLinkedMember(authUser);
-  requirePrivileged(actor);
+  requireActorRole(actor, 'TREASURER');
 
   const loanRow = getLoanRowById(params.id);
   if (!loanRow) {
@@ -496,7 +613,9 @@ function getLoansByMember(memberId, authUser) {
 
 module.exports = {
   requestLoan,
-  approveLoan,
+  treasurerApproveLoan,
+  adminApproveLoan,
+  rejectLoan,
   recordRepayment,
   getOverdueLoans,
   getLoanById,

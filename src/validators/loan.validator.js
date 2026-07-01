@@ -61,11 +61,34 @@ const requestLoanSchema = z.object({
 });
 
 // ─── PATCH /api/loans/:id/approve ────────────────────────────────────────────
-// BR-005: Restricted to ADMIN or TREASURER roles (enforced in service layer).
-// No body fields required beyond the loan ID in params.
+// Legacy single-step schema — kept for backward compat (can be removed later).
 
 const approveLoanSchema = z.object({
   params: idParams,
+});
+
+// ─── PATCH /api/loans/:id/treasurer-approve ──────────────────────────────────
+// BR-005 Stage 1: Treasurer initial approval (PENDING → TREASURER_APPROVED).
+
+const treasurerApproveLoanSchema = z.object({
+  params: idParams,
+});
+
+// ─── PATCH /api/loans/:id/admin-approve ──────────────────────────────────────
+// BR-005 Stage 2: Admin final approval (TREASURER_APPROVED → ACTIVE).
+
+const adminApproveLoanSchema = z.object({
+  params: idParams,
+});
+
+// ─── PATCH /api/loans/:id/reject ─────────────────────────────────────────────
+// Treasurer rejects PENDING loans; Admin rejects TREASURER_APPROVED loans.
+
+const rejectLoanSchema = z.object({
+  params: idParams,
+  body: z.object({
+    reason: z.string().max(500).optional(),
+  }).optional(),
 });
 
 // ─── POST /api/loans/:id/repay ────────────────────────────────────────────────
@@ -97,7 +120,11 @@ const getLoanByIdSchema = z.object({
 module.exports = {
   requestLoanSchema,
   approveLoanSchema,
+  treasurerApproveLoanSchema,
+  adminApproveLoanSchema,
+  rejectLoanSchema,
   repayLoanSchema,
   overdueLoansSchema,
   getLoanByIdSchema,
 };
+

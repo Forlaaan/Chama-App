@@ -48,18 +48,54 @@ Cannot:
 
 ---
 
-## Treasurer / Admin
+## Treasurer
 
 Inherits all Member permissions.
 
 Additional permissions:
 
 * Record contributions
-* Manage members
-* Approve loans
+* Initial loan approval (moves loan from PENDING → TREASURER_APPROVED)
+* Reject loans (moves loan from PENDING → REJECTED)
 * Apply penalties
 * Generate reports
+* Record loan repayments
+
+Special rule: When the Treasurer themselves requests a loan, the loan status is
+automatically set to TREASURER_APPROVED (bypassing the initial approval step).
+
+Cannot:
+
+* Give final loan approval (requires Admin)
+* Manage members (add/remove/edit roles)
 * Trigger notification workflows
+
+---
+
+## Admin
+
+Inherits all Member permissions.
+
+Additional permissions:
+
+* Final loan approval (receives TREASURER_APPROVED loans, gives final stamp → ACTIVE + disbursement + SMS)
+* Reject loans (moves loan from TREASURER_APPROVED → REJECTED)
+* Manage members (add/remove/edit roles)
+* Trigger notification workflows
+
+Cannot:
+
+* Record contributions (Treasurer responsibility)
+* Apply penalties (Treasurer responsibility)
+* Record loan repayments (Treasurer responsibility)
+
+---
+
+## Role Constraints
+
+* A chama group can have at most **one Treasurer** and **one Admin**.
+* Every group must have exactly one Admin (the group creator).
+* MEMBER is the default role for new members.
 
 ---
 
@@ -175,7 +211,7 @@ Represents money borrowed by a member.
 ### Status Values
 
 * PENDING
-* APPROVED
+* TREASURER_APPROVED
 * ACTIVE
 * OVERDUE
 * PAID
@@ -324,24 +360,43 @@ When a Treasurer records a contribution:
 
 ## BR-004: Loan Requests
 
-Members can submit loan requests.
+Members and Treasurers can submit loan requests.
 
 New requests begin with:
 
 Status = PENDING
 
-Only Admin/Treasurer may approve or reject.
+**Exception:** When the **Treasurer** requests a loan, the status is automatically
+set to TREASURER_APPROVED (bypassing their own initial approval step), and proceeds
+directly to the Admin's final approval queue.
+
+Only Treasurer may give initial approval (PENDING → TREASURER_APPROVED).
+Only Admin may give final approval (TREASURER_APPROVED → ACTIVE).
+Both Treasurer and Admin may reject loans at their respective stages.
 
 ---
 
-## BR-005: Loan Approval
+## BR-005: Loan Approval (Two-Stage)
 
-Upon approval:
+### Stage 1 — Treasurer Initial Approval
 
-1. Loan status becomes ACTIVE.
-2. Loan disbursement transaction is created.
-3. Member balance is updated.
-4. SMS notification is sent.
+The Treasurer reviews PENDING loan requests and either:
+
+* **Approves**: Loan status moves to TREASURER_APPROVED. The loan now appears
+  in the Admin's final approval queue.
+* **Rejects**: Loan status moves to REJECTED.
+
+### Stage 2 — Admin Final Approval
+
+The Admin reviews TREASURER_APPROVED loan requests and either:
+
+* **Approves** (final): The following steps execute:
+  1. Loan status becomes ACTIVE.
+  2. Loan disbursement transaction is created (append-only, BR-002).
+  3. Member balance is updated.
+  4. SMS notification is sent to the member.
+
+* **Rejects**: Loan status moves to REJECTED.
 
 ---
 
