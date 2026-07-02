@@ -1,5 +1,8 @@
 const firebaseAuthService = require('../services/firebaseAuth.service');
 const memberService = require('../services/member.service');
+const { randomUUID } = require('crypto');
+const { db } = require('../config/database');
+const { AppError } = require('../utils/errors');
 
 async function register(req, res) {
   const input = req.validated.body;
@@ -50,6 +53,14 @@ async function login(req, res) {
 }
 
 async function getProfile(req, res) {
+  const member = req.user.member;
+  let inviteCode = null;
+
+  if (member && member.groupId) {
+    const groupRow = db.prepare('SELECT inviteCode FROM "Group" WHERE id = ?').get(member.groupId);
+    if (groupRow) inviteCode = groupRow.inviteCode;
+  }
+
   res.json({
     success: true,
     data: {
@@ -58,7 +69,8 @@ async function getProfile(req, res) {
         email: req.user.email,
         phoneNumber: req.user.phoneNumber
       },
-      member: req.user.member
+      member,
+      inviteCode
     }
   });
 }
@@ -78,4 +90,77 @@ async function verifyToken(req, res) {
   });
 }
 
-module.exports = { register, login, getProfile, verifyToken };
+async function onboard(req, res) {
+  const { fullName, action, inviteCode, groupName, groupDescription } = req.validated.body;
+  const uid = req.user.uid;
+  const phoneNumber = req.user.phoneNumber;
+
+  if (!phoneNumber) {
+    throw new AppError('Phone number not found in authentication token.', 400);
+  }
+
+  // Prevent double-onboarding
+  if (req.user.member) {
+    throw new AppError('User is already registered to a group.', 400);
+  }
+
+  let groupId;
+  let assignedRole;
+  let groupInviteCode;
+
+  if (action === 'CREATE') {
+    groupId = 'group_' + randomUUID();
+    // Generate a 6-character random alphanumeric invite code
+    groupInviteCode = 'CHM-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    assignedRole = 'ADMIN';
+
+    const now = new Date().toISOString();
+    
+    db.prepare(`
+      INSERT INTO "Group" (id, name, description, inviteCode, contributionAmount, contributionFrequency, createdAt, updatedAt, auditSignature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      groupId, 
+      groupName, 
+      groupDescription || '', 
+      groupInviteCode, 
+      '5000', 
+      'MONTHLY', 
+      now, 
+      now, 
+      'audit_sig'
+    );
+
+  } else if (action === 'JOIN') {
+    const group = db.prepare('SELECT id, inviteCode FROM "Group" WHERE inviteCode = ?').get(inviteCode);
+    
+    if (!group) {
+      throw new AppError('Invalid or unrecognized invite code.', 404);
+    }
+    
+    groupId = group.id;
+    groupInviteCode = group.inviteCode;
+    assignedRole = 'MEMBER';
+  }
+
+  // Create the new member record linked to the Firebase UID
+  const member = memberService.createMember({
+    id: uid,
+    groupId,
+    fullName,
+    phoneNumber,
+    role: assignedRole,
+    accountBalance: '0.00'
+  });
+
+  res.status(201).json({
+    success: true,
+    message: action === 'CREATE' ? 'Chama created and user registered' : 'Joined Chama successfully',
+    data: {
+      member,
+      inviteCode: groupInviteCode
+    }
+  });
+}
+
+module.exports = { register, login, getProfile, verifyToken, onboard };

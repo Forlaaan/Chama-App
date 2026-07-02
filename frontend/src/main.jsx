@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { auth, RecaptchaVerifier, signInWithPhoneNumber } from './firebase';
 import { cacheGet, cacheSet } from './cache';
+import OnboardingScreen from './OnboardingScreen';
 
 // VITE_API_BASE_URL should be set in .env when building for a real device.
 // For a real Android device on the same WiFi as the dev PC, set it to the PC's LAN IP.
@@ -66,6 +67,8 @@ function App() {
   const [transactions, setTransactions] = useState([]);
   const [loans, setLoans] = useState([]);
   const [currentMember, setCurrentMember] = useState(null);
+  const [inviteCode, setInviteCode] = useState(null);
+  const [pendingFullName, setPendingFullName] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -96,26 +99,35 @@ function App() {
     setLoading(true);
     setNotice('');
     try {
+      // 1. Fetch user profile first
+      const profile = await apiFetch('/api/auth/profile', { token: authToken });
+      
+      if (!profile.member) {
+        // User is authenticated in Firebase but has not joined/created a Chama
+        setScreen('onboard');
+        setLoading(false);
+        return;
+      }
+
+      // User has a Chama. Update state.
+      setCurrentMember(profile.member);
+      setInviteCode(profile.inviteCode);
+      
+      // If we are still on the login screen or onboard screen, route them to their dashboard
+      setScreen(prev => (prev === 'login' || prev === 'onboard') ? (profile.member.role === 'MEMBER' ? 'member' : (profile.member.role === 'TREASURER' ? 'treasurer' : 'admin')) : prev);
+
+      // 2. Fetch standard data (Dashboard content)
       const liveMembers = await apiFetch('/api/members', { token: authToken });
       const liveTransactions = await apiFetch('/api/transactions', { token: authToken });
-      // Fetch user's profile to get current member context (assuming we could get this via an endpoint, 
-      // but here we just find the member matching our ID token. Actually, we don't have a /profile endpoint 
-      // in member.routes.js that returns current user. Let's just pick the first member if we don't know.)
       setMembers(liveMembers || []);
       setTransactions(liveTransactions || []);
       
       // Try to load loans based on role
       try {
-        // Just load overdue for everyone to see (if they can)
-        const allLoansRes = await apiFetch('/api/loans/member/' + liveMembers[0]?.id, { token: authToken });
+        const allLoansRes = await apiFetch('/api/loans/member/' + profile.member.id, { token: authToken });
         setLoans(Array.isArray(allLoansRes) ? allLoansRes : []);
       } catch (e) {
         // ignore
-      }
-      
-      if (!currentMember && liveMembers?.length > 0) {
-        // Fallback: pick the first member if we don't know who we are
-        setCurrentMember(liveMembers[0]);
       }
     } catch (error) {
       setNotice(error.message);
@@ -162,10 +174,20 @@ function App() {
     await refreshData();
   }
   
-  async function rejectLoan(loanId, reason = 'Rejected') {
-    await apiFetch('/api/loans/' + loanId + '/reject', { token, method: 'PATCH', body: { reason } });
+  async function rejectLoan(loanId) {
+    const userReason = window.prompt("Enter rejection reason:");
+    if (userReason === null) return; // User cancelled
+    await apiFetch('/api/loans/' + loanId + '/reject', { token, method: 'PATCH', body: { reason: userReason || 'No reason provided' } });
     setNotice('Loan rejected.');
     await refreshData();
+  }
+
+  async function handleLogout() {
+    await auth.signOut();
+    localStorage.removeItem('chamaToken');
+    setToken('');
+    setCurrentMember(null);
+    setScreen('login');
   }
 
   async function recordRepayment(form) {
@@ -194,15 +216,21 @@ function App() {
   const memberLoans = loans.filter((loan) => loan.memberId === currentMember?.id);
   const memberTransactions = transactions.filter((tx) => tx.memberId === currentMember?.id);
 
-  if (!currentMember && screen !== 'login') {
+  if (!currentMember && screen !== 'login' && screen !== 'onboard') {
     return <div className="shell">Loading member profile...</div>;
   }
 
   return <main className="shell">
     {!isOnline && <div style={{background: 'red', color: 'white', textAlign: 'center', padding: '4px'}}>You are currently offline</div>}
     
-    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} setToken={setToken} setScreen={setScreen} setCurrentMember={setCurrentMember} /> : <>
-      <TopBar screen={screen} role={role} setScreen={setScreen} currentMember={currentMember} loading={loading} />
+    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} setToken={setToken} setScreen={setScreen} setCurrentMember={setCurrentMember} setPendingFullName={setPendingFullName} /> : 
+     screen === 'onboard' ? <OnboardingScreen token={token} apiFetch={apiFetch} initialFullName={pendingFullName} onComplete={(member, code) => {
+        setCurrentMember(member);
+        setInviteCode(code);
+        setScreen(member.role === 'ADMIN' ? 'admin' : 'member');
+        refreshData(token);
+     }} /> : <>
+      <TopBar screen={screen} role={role} setScreen={setScreen} currentMember={currentMember} loading={loading} onLogout={handleLogout} />
       <nav className="tabs">{navItems.filter((item) => item.roles.includes(role)).map((item) => <button key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}>{item.label}</button>)}</nav>
       {notice && <div className="notice">{notice}</div>}
       
@@ -210,7 +238,7 @@ function App() {
       
       {screen === 'treasurer' && <TreasurerPanel members={members} pendingLoans={pendingLoans} approveLoan={treasurerApproveLoan} rejectLoan={rejectLoan} go={setScreen} />}
       
-      {screen === 'admin' && <AdminPanel members={members} treasurerApprovedLoans={treasurerApprovedLoans} approveLoan={adminApproveLoan} rejectLoan={rejectLoan} go={setScreen} />}
+      {screen === 'admin' && <AdminPanel members={members} treasurerApprovedLoans={treasurerApprovedLoans} approveLoan={adminApproveLoan} rejectLoan={rejectLoan} go={setScreen} inviteCode={inviteCode} />}
       
       {screen === 'recordContribution' && <FormScreen title="Record Contribution" onBack={() => setScreen('treasurer')} onSubmit={recordContribution} successText="Confirmation message will appear here"><MemberSelect members={members} /><label>Contribution Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="5000" /></label><label>Date<input name="date" defaultValue={new Date().toISOString().slice(0, 10)} /></label><label>Description<input name="description" defaultValue="Monthly contribution" /></label></FormScreen>}
       
@@ -227,7 +255,8 @@ function App() {
   </main>;
 }
 
-function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMember }) {
+function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMember, setPendingFullName }) {
+  const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('+254');
   const [verificationId, setVerificationId] = useState('');
   const [code, setCode] = useState('');
@@ -275,21 +304,12 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
     try {
       const token = await firebaseUser.getIdToken();
       setToken(token);
+      setPendingFullName(fullName);
       localStorage.setItem('chamaToken', token);
       
-      // Fetch members and find the one matching this phone number
-      const members = await apiFetch('/api/members', { token });
-      const me = members.find(m => m.phoneNumber === firebaseUser.phoneNumber);
+      // Let the main App's refreshData handle the profile check and routing
+      // It will fetch /api/auth/profile and route to 'onboard' if member is null.
       
-      if (me) {
-        setCurrentMember(me);
-        setScreen(me.role === 'MEMBER' ? 'member' : (me.role === 'TREASURER' ? 'treasurer' : 'admin'));
-      } else {
-        // Firebase OTP passed but this number isn't a registered member
-        setError('Your number is not registered as a member. Please ask your group Admin to add you.');
-        // Sign out from Firebase to avoid a stale session
-        await auth.signOut();
-      }
     } catch (e) {
       setError('Login succeeded but could not reach the server: ' + e.message + '. Make sure the backend is running and your phone is on the same WiFi as your PC.');
     } finally {
@@ -305,8 +325,9 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
     
     {!verificationId ? (
       <>
+        <label>Full Legal Name<input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="e.g. John Doe" /></label>
         <label>Phone Number<input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+254 000 000 000" /></label>
-        <button className="primary bottom-action" onClick={handleSendOtp} disabled={loading}>{loading ? 'Sending OTP...' : 'Send Login Code'}</button>
+        <button className="primary bottom-action" onClick={handleSendOtp} disabled={loading || fullName.trim().length < 2}>{loading ? 'Sending OTP...' : 'Send Login Code'}</button>
       </>
     ) : (
       <>
@@ -319,7 +340,7 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
   </div>;
 }
 
-function TopBar({ screen, role, setScreen, currentMember, loading }) {
+function TopBar({ screen, role, setScreen, currentMember, loading, onLogout }) {
   const titles = { member: 'Chama System', admin: 'Admin Panel', treasurer: 'Treasurer Panel', recordContribution: 'Record Contribution', requestLoan: 'Request Loan', repayment: 'Record Repayment', members: 'Members', ledger: 'Shared Ledger', sms: 'SMS Test' };
   
   function getHome() {
@@ -333,6 +354,7 @@ function TopBar({ screen, role, setScreen, currentMember, loading }) {
     <strong>{titles[screen] || 'Chama System'}</strong>
     <div className="top-actions">
       {loading && <span className="tiny">Sync</span>}
+      <button style={{ background: 'transparent', border: 'none', color: 'white', textDecoration: 'underline' }} onClick={onLogout}>Logout</button>
       <span className="avatar">{currentMember?.fullName?.slice(0, 1)}</span>
     </div>
   </header>;
@@ -388,8 +410,18 @@ function TreasurerPanel({ members, pendingLoans, approveLoan, rejectLoan, go }) 
   </div>;
 }
 
-function AdminPanel({ members, treasurerApprovedLoans, approveLoan, rejectLoan, go }) {
+function AdminPanel({ members, treasurerApprovedLoans, approveLoan, rejectLoan, go, inviteCode }) {
   return <div className="screen-stack">
+    {inviteCode && (
+      <section className="wire-card" style={{ background: 'var(--primary)', color: 'white' }}>
+        <p className="eyebrow strong" style={{ color: 'white', opacity: 0.9 }}>Group Invite Code</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: '8px 0', letterSpacing: '2px' }}>{inviteCode}</h2>
+          <button style={{ background: 'white', color: 'var(--primary)', border: 'none', padding: '4px 8px', borderRadius: '4px' }} onClick={() => navigator.clipboard.writeText(inviteCode)}>Copy</button>
+        </div>
+        <p style={{ fontSize: '12px', margin: 0, opacity: 0.9 }}>Share this code with new members so they can join your Chama.</p>
+      </section>
+    )}
     <div className="action-grid">
       <ActionTile icon="U" label="Manage Members" onClick={() => go('members')} />
       <ActionTile icon="S" label="Test SMS" onClick={() => go('sms')} />

@@ -41,6 +41,7 @@ function createApp() {
   app.use('/api/transactions', transactionRoutes);
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/loans', loanRoutes);
+  app.use('/api/penalties', require('./routes/penalty.routes'));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

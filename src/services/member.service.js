@@ -50,7 +50,7 @@ function createMember(input) {
 
   const createdAt = now();
   const member = {
-    id: randomUUID(),
+    id: input.id || randomUUID(),
     groupId: input.groupId,
     fullName: input.fullName,
     phoneNumber: input.phoneNumber,

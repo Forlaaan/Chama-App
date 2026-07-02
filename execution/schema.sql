@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS "Group" (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT,
+    inviteCode TEXT UNIQUE NOT NULL,
     contributionAmount TEXT NOT NULL,
     contributionFrequency TEXT NOT NULL,
     createdAt TEXT NOT NULL,

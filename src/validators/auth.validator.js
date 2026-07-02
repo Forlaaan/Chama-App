@@ -30,4 +30,23 @@ const tokenSchema = z.object({
   query: z.object({})
 });
 
-module.exports = { registerSchema, loginSchema, tokenSchema };
+const onboardSchema = z.object({
+  body: z.object({
+    fullName: z.string().min(2),
+    action: z.enum(['JOIN', 'CREATE']),
+    inviteCode: z.string().optional(),
+    groupName: z.string().optional(),
+    groupDescription: z.string().optional()
+  }).refine((data) => {
+    if (data.action === 'JOIN' && !data.inviteCode) return false;
+    if (data.action === 'CREATE' && !data.groupName) return false;
+    return true;
+  }, {
+    message: "Invite code is required to join, or group name is required to create",
+    path: ["action"]
+  }),
+  params: z.object({}),
+  query: z.object({})
+});
+
+module.exports = { registerSchema, loginSchema, tokenSchema, onboardSchema };
