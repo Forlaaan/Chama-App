@@ -8,6 +8,10 @@ const memberRoutes = require('./routes/member.routes');
 const transactionRoutes = require('./routes/transaction.routes');
 const notificationRoutes = require('./routes/notification.routes');
 const loanRoutes = require('./routes/loan.routes');
+const superadminRoutes = require('./routes/superadmin.routes');
+const reportsRoutes = require('./routes/reports.routes');
+const contributionRoutes = require('./routes/contribution.routes');
+const mpesaRoutes = require('./routes/mpesa.routes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 
 function createApp() {
@@ -42,6 +46,10 @@ function createApp() {
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/loans', loanRoutes);
   app.use('/api/penalties', require('./routes/penalty.routes'));
+  app.use('/api/superadmin', superadminRoutes);
+  app.use('/api/reports', reportsRoutes);
+  app.use('/api/contributions', contributionRoutes);
+  app.use('/api/mpesa', mpesaRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

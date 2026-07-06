@@ -26,6 +26,13 @@ const {
 // All loan routes require a valid Firebase bearer token
 router.use(verifyFirebaseToken);
 
+// ─── GET /api/loans ────────────────────────────────────────────────────────────
+// Retrieve all loans for the current user's group.
+router.get(
+  '/',
+  asyncHandler(loanController.getGroupLoans)
+);
+
 // ─── POST /api/loans/request ──────────────────────────────────────────────────
 // BR-004: Any authenticated member may submit a loan request.
 // If the requester is the Treasurer, status is auto-set to TREASURER_APPROVED.

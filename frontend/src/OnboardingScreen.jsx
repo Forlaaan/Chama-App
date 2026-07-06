@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 
-export default function OnboardingScreen({ token, onComplete, apiFetch, initialFullName }) {
-  const [fullName, setFullName] = useState(initialFullName || '');
+export default function OnboardingScreen({ token, onComplete, apiFetch }) {
+  const [fullName, setFullName] = useState('');
   const [action, setAction] = useState('JOIN'); // 'JOIN' or 'CREATE'
   const [inviteCode, setInviteCode] = useState('');
   const [groupName, setGroupName] = useState('');
@@ -51,6 +51,18 @@ export default function OnboardingScreen({ token, onComplete, apiFetch, initialF
       <h2 style={{ textAlign: 'center', marginBottom: 20 }}>Welcome! Let's get you set up.</h2>
 
       <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: 20 }}>
+          <label>
+            Full Legal Name
+            <input
+              required
+              value={fullName}
+              onChange={e => setFullName(e.target.value)}
+              placeholder="e.g. John Doe"
+            />
+          </label>
+        </div>
+
         <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
           <button 
             type="button" 

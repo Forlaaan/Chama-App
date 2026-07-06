@@ -139,7 +139,7 @@ try {
 
   insertMember.run(betaAdmin, betaId, 'Beta Admin', '+254711000001', 'admin@beta.com', 'none', 'ADMIN', '8000', getPastDate(30), now, 'seed');
   insertMember.run(betaTreasurer, betaId, 'Beta Treasurer', '+254711000002', 'treasurer@beta.com', 'none', 'TREASURER', '8000', getPastDate(30), now, 'seed');
-  insertMember.run(betaMember, betaId, 'Beta Member', '+254711000003', 'member@beta.com', 'none', 'MEMBER', '8000', getPastDate(30), now, 'seed');
+  insertMember.run(betaMember, betaId, 'Beta Member', '+254711000099', 'member@beta.com', 'none', 'MEMBER', '8000', getPastDate(30), now, 'seed');
 
   // Seed Contributions (4 weeks for each)
   const betaMembers = [betaAdmin, betaTreasurer, betaMember];
@@ -155,7 +155,11 @@ try {
   const loanBetaPending = uuid();
   insertLoan.run(loanBetaPending, betaMember, betaId, '12000', '0.05', '12600', '0', getPastDate(-14), 'TREASURER_APPROVED', null, getPastDate(3), getPastDate(1), 'seed');
 
-  console.log('Seeded: Alpha Chama (ALPHA1) and Beta Chama (BETA02) with members, transactions, and loans.');
+  // --- 3. SuperAdmin ---
+  const superAdminId = 'superadmin_1';
+  insertMember.run(superAdminId, null, 'Platform SuperAdmin', '+254799000000', 'super@platform.com', 'none', 'SUPERADMIN', '0', getPastDate(1), now, 'seed');
+
+  console.log('Seeded: Alpha Chama (ALPHA1), Beta Chama (BETA02), and Platform SuperAdmin.');
 } catch (err) {
   console.error('Seeding failed:', err.message);
 }

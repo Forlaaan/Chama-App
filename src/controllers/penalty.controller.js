@@ -18,8 +18,15 @@ async function getMemberPenalties(req, res) {
   res.json({ success: true, data: penalties });
 }
 
+async function sweepPenalties(req, res) {
+  const groupId = req.user.member.groupId;
+  const result = penaltyService.sweepPenalties(groupId);
+  res.json({ success: true, data: result });
+}
+
 module.exports = {
   applyPenalty,
   settlePenalty,
-  getMemberPenalties
+  getMemberPenalties,
+  sweepPenalties
 };

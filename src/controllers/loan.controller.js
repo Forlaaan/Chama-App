@@ -106,6 +106,16 @@ async function getLoansByMember(req, res) {
   });
 }
 
+// ─── GET /api/loans ────────────────────────────────────────────────────────────
+
+async function getGroupLoans(req, res) {
+  const loans = await loanService.getLoansByGroup(req.user.member.groupId, req.user);
+  res.status(200).json({
+    success: true,
+    data: loans,
+  });
+}
+
 module.exports = {
   requestLoan,
   treasurerApproveLoan,
@@ -115,5 +125,6 @@ module.exports = {
   getOverdueLoans,
   getLoanById,
   getLoansByMember,
+  getGroupLoans,
 };
 

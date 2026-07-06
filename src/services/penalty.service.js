@@ -19,13 +19,15 @@ function applyPenalty(input) {
   const member = memberService.getMemberById(input.memberId);
   
   db.prepare(`
-    INSERT INTO "Penalty" (id, memberId, amount, reason, appliedAt, settled, createdAt, updatedAt, auditSignature)
-    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+    INSERT INTO "Penalty" (id, memberId, groupId, amount, reason, cycle, appliedAt, settled, createdAt, updatedAt, auditSignature)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).run(
     penaltyId,
     input.memberId,
+    member.groupId,
     input.amount,
     input.reason,
+    input.cycle || null,
     appliedAt,
     appliedAt,
     appliedAt,
@@ -65,9 +67,55 @@ function settlePenalty(id) {
   return getPenaltyById(id);
 }
 
+function sweepPenalties(groupId) {
+  const group = db.prepare('SELECT * FROM "Group" WHERE id = ?').get(groupId);
+  if (!group) throw new AppError('Group not found', 404);
+  
+  const percentage = parseFloat(group.penaltyPercentage || '0');
+  if (percentage <= 0) return { count: 0, message: 'Penalty percentage is 0, no penalties applied.' };
+  
+  const contributionAmount = parseFloat(group.contributionAmount || '0');
+  const penaltyAmount = (contributionAmount * (percentage / 100)).toFixed(2);
+  
+  // A naive implementation for V3: check who has not contributed in the current calendar month
+  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const cycleName = currentMonth;
+  
+  const members = db.prepare('SELECT id FROM "Member" WHERE groupId = ?').all(groupId);
+  let appliedCount = 0;
+  
+  for (const m of members) {
+    // Has the member contributed this month?
+    const hasContributed = db.prepare(`
+      SELECT 1 FROM "Transaction" 
+      WHERE memberId = ? AND transactionType = 'CONTRIBUTION' AND timestamp LIKE ?
+    `).get(m.id, currentMonth + '%');
+    
+    if (!hasContributed) {
+      // Check if they already have a penalty for this cycle
+      const hasPenalty = db.prepare(`
+        SELECT 1 FROM "Penalty" WHERE memberId = ? AND cycle = ?
+      `).get(m.id, cycleName);
+      
+      if (!hasPenalty) {
+        applyPenalty({
+          memberId: m.id,
+          amount: penaltyAmount,
+          reason: `Late contribution for cycle ${cycleName}`,
+          cycle: cycleName
+        });
+        appliedCount++;
+      }
+    }
+  }
+  
+  return { count: appliedCount, message: `Applied ${appliedCount} penalties for cycle ${cycleName}.` };
+}
+
 module.exports = {
   applyPenalty,
   getPenaltyById,
   getPenaltiesByMember,
-  settlePenalty
+  settlePenalty,
+  sweepPenalties
 };

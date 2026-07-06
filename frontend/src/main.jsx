@@ -2,14 +2,18 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { auth, RecaptchaVerifier, signInWithPhoneNumber } from './firebase';
-import { cacheGet, cacheSet } from './cache';
+import { cacheGet, cacheSet, cacheClearAll } from './cache';
 import OnboardingScreen from './OnboardingScreen';
 
+import { Capacitor } from '@capacitor/core';
+
 // VITE_API_BASE_URL should be set in .env when building for a real device.
-// For a real Android device on the same WiFi as the dev PC, set it to the PC's LAN IP.
 // e.g. VITE_API_BASE_URL=http://192.168.100.33:4000
-// For the Android emulator only, 10.0.2.2 maps to the host PC.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://192.168.100.33:4000';
+let defaultApiUrl = 'http://localhost:4000';
+if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+  defaultApiUrl = 'http://10.0.2.2:4000'; // Default Android Emulator host IP
+}
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || defaultApiUrl;
 
 function money(value) {
   return 'KSH ' + Number(value || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 });
@@ -30,6 +34,9 @@ async function apiFetch(path, options) {
   const headers = { 'Content-Type': 'application/json' };
   if (settings.token) headers.Authorization = 'Bearer ' + settings.token;
   
+  // Build a cache key that includes the token so different users don't share cached data
+  const cacheKey = (settings.token || 'anon') + ':' + path;
+  
   try {
     const response = await fetch(API_BASE_URL + path, {
       method: settings.method || 'GET',
@@ -41,16 +48,16 @@ async function apiFetch(path, options) {
     
     const data = payload.data === undefined ? payload : payload.data;
     
-    // Cache GET responses
+    // Cache GET responses keyed by token+path
     if ((settings.method || 'GET') === 'GET') {
-      cacheSet(path, data);
+      cacheSet(cacheKey, data);
     }
     
     return data;
   } catch (error) {
     // Try cache for GET requests if we have a network-level failure
     if (error.name === 'TypeError' && (settings.method || 'GET') === 'GET') {
-      const cached = cacheGet(path);
+      const cached = cacheGet(cacheKey);
       if (cached) return cached;
     }
     // Show the REAL error so we can debug — don't mask it
@@ -61,14 +68,14 @@ async function apiFetch(path, options) {
 
 function App() {
   const [screen, setScreen] = useState('login');
-  const [language, setLanguage] = useState('ENG');
   const [token, setToken] = useState(localStorage.getItem('chamaToken') || '');
   const [members, setMembers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loans, setLoans] = useState([]);
+  const [pendingContributions, setPendingContributions] = useState([]);
+  const [language, setLanguage] = useState('en');
   const [currentMember, setCurrentMember] = useState(null);
   const [inviteCode, setInviteCode] = useState(null);
-  const [pendingFullName, setPendingFullName] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -88,11 +95,23 @@ function App() {
 
   const navItems = useMemo(() => [
     { id: 'member', label: 'Dashboard', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
-    { id: 'ledger', label: 'Ledger', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
+    { id: 'reports', label: 'Reports', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
+    { id: 'submitContribution', label: 'Contribute', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
     { id: 'requestLoan', label: 'Request Loan', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
     { id: 'treasurer', label: 'Treasurer', roles: ['TREASURER'] },
-    { id: 'admin', label: 'Admin', roles: ['ADMIN'] }
+    { id: 'admin', label: 'Admin', roles: ['ADMIN'] },
+    { id: 'superadmin', label: 'Platform', roles: ['SUPERADMIN'] }
   ], []);
+
+  function getHomeScreen(memberRole) {
+    switch (memberRole) {
+      case 'SUPERADMIN': return 'superadmin';
+      case 'ADMIN': return 'admin';
+      case 'TREASURER': return 'treasurer';
+      case 'MEMBER': 
+      default: return 'member';
+    }
+  }
 
   async function refreshData(authToken = token) {
     if (!authToken) return;
@@ -103,31 +122,45 @@ function App() {
       const profile = await apiFetch('/api/auth/profile', { token: authToken });
       
       if (!profile.member) {
-        // User is authenticated in Firebase but has not joined/created a Chama
+        // User is authenticated but has not joined/created a Chama
         setScreen('onboard');
         setLoading(false);
         return;
       }
 
-      // User has a Chama. Update state.
+      // User has a Chama or is SuperAdmin. Update state.
       setCurrentMember(profile.member);
       setInviteCode(profile.inviteCode);
       
-      // If we are still on the login screen or onboard screen, route them to their dashboard
-      setScreen(prev => (prev === 'login' || prev === 'onboard') ? (profile.member.role === 'MEMBER' ? 'member' : (profile.member.role === 'TREASURER' ? 'treasurer' : 'admin')) : prev);
+      // Route to the correct home screen based on role
+      setScreen(prev => {
+        if (prev === 'login' || prev === 'onboard') {
+          return getHomeScreen(profile.member.role);
+        }
+        return prev;
+      });
 
       // 2. Fetch standard data (Dashboard content)
-      const liveMembers = await apiFetch('/api/members', { token: authToken });
-      const liveTransactions = await apiFetch('/api/transactions', { token: authToken });
-      setMembers(liveMembers || []);
-      setTransactions(liveTransactions || []);
-      
-      // Try to load loans based on role
-      try {
-        const allLoansRes = await apiFetch('/api/loans/member/' + profile.member.id, { token: authToken });
-        setLoans(Array.isArray(allLoansRes) ? allLoansRes : []);
-      } catch (e) {
-        // ignore
+      if (profile.member.groupId) {
+        const liveMembers = await apiFetch('/api/members', { token: authToken });
+        const liveTransactions = await apiFetch('/api/transactions', { token: authToken });
+        setMembers(liveMembers || []);
+        setTransactions(liveTransactions || []);
+        
+        // Try to load loans for the entire group
+        try {
+          const allLoansRes = await apiFetch('/api/loans', { token: authToken });
+          setLoans(Array.isArray(allLoansRes) ? allLoansRes : []);
+        } catch (e) {
+          // ignore
+        }
+        
+        if (profile.member.role === 'TREASURER' || profile.member.role === 'ADMIN') {
+          try {
+            const pcRes = await apiFetch('/api/contributions/pending', { token: authToken });
+            setPendingContributions(Array.isArray(pcRes) ? pcRes : []);
+          } catch (e) { }
+        }
       }
     } catch (error) {
       setNotice(error.message);
@@ -139,10 +172,11 @@ function App() {
   // Effect to load initial data if token exists
   useEffect(() => {
     if (token) {
-      // Decode token to get phone number to find member?
-      // Since Firebase auth might not map directly to member until we have a /profile endpoint,
-      // we'll let LoginScreen set the currentMember after successful login.
       refreshData(token);
+    } else {
+      // No token — make sure we're on the login screen
+      setScreen('login');
+      setCurrentMember(null);
     }
   }, [token]);
 
@@ -152,6 +186,19 @@ function App() {
     await apiFetch('/api/transactions/contributions', { token, method: 'POST', body });
     await refreshData();
     return 'Contribution recorded.';
+  }
+
+  async function submitContributionRequestAction(form) {
+    const data = Object.fromEntries(new FormData(form));
+    await apiFetch('/api/contributions/request', { token, method: 'POST', body: { amount: data.amount, cycle: data.cycle } });
+    await refreshData();
+    return 'Contribution request submitted for approval.';
+  }
+
+  async function submitMpesaContribution(form) {
+    const data = Object.fromEntries(new FormData(form));
+    await apiFetch('/api/mpesa/stkpush', { token, method: 'POST', body: { amount: data.amount, reference: 'CONTRIBUTION', description: 'Chama Contribution' } });
+    return 'M-Pesa prompt sent to your phone. Please enter your PIN.';
   }
 
   async function requestLoanAction(form) {
@@ -182,11 +229,45 @@ function App() {
     await refreshData();
   }
 
+  async function confirmContribution(id) {
+    await apiFetch('/api/contributions/' + id + '/confirm', { token, method: 'PATCH' });
+    setNotice('Contribution confirmed.');
+    await refreshData();
+  }
+
+  async function rejectContributionReq(id) {
+    await apiFetch('/api/contributions/' + id + '/reject', { token, method: 'PATCH', body: { reason: 'Rejected by treasurer' } });
+    setNotice('Contribution request rejected.');
+    await refreshData();
+  }
+
+  async function applyPenaltySweep() {
+    if (!window.confirm("Are you sure you want to sweep for late contributions and apply penalties for this cycle?")) return;
+    try {
+      const res = await apiFetch('/api/penalties/sweep', { token, method: 'POST' });
+      setNotice(res.message);
+      await refreshData();
+    } catch (err) {
+      setNotice('Failed to apply penalties: ' + err.message);
+    }
+  }
+
   async function handleLogout() {
-    await auth.signOut();
+    try { await auth.signOut(); } catch (e) { /* ignore if mock login */ }
     localStorage.removeItem('chamaToken');
+    cacheClearAll(); // Clear all cached API data so stale profiles don't persist
+    if (window.recaptchaVerifier) {
+      try { window.recaptchaVerifier.clear(); } catch (e) { /* ignore */ }
+      window.recaptchaVerifier = null;
+    }
     setToken('');
     setCurrentMember(null);
+    setMembers([]);
+    setTransactions([]);
+    setLoans([]);
+    setPendingContributions([]);
+    setInviteCode(null);
+    setNotice('');
     setScreen('login');
   }
 
@@ -223,8 +304,8 @@ function App() {
   return <main className="shell">
     {!isOnline && <div style={{background: 'red', color: 'white', textAlign: 'center', padding: '4px'}}>You are currently offline</div>}
     
-    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} setToken={setToken} setScreen={setScreen} setCurrentMember={setCurrentMember} setPendingFullName={setPendingFullName} /> : 
-     screen === 'onboard' ? <OnboardingScreen token={token} apiFetch={apiFetch} initialFullName={pendingFullName} onComplete={(member, code) => {
+    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} setToken={setToken} setScreen={setScreen} setCurrentMember={setCurrentMember} /> : 
+     screen === 'onboard' ? <OnboardingScreen token={token} apiFetch={apiFetch} onComplete={(member, code) => {
         setCurrentMember(member);
         setInviteCode(code);
         setScreen(member.role === 'ADMIN' ? 'admin' : 'member');
@@ -234,29 +315,32 @@ function App() {
       <nav className="tabs">{navItems.filter((item) => item.roles.includes(role)).map((item) => <button key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}>{item.label}</button>)}</nav>
       {notice && <div className="notice">{notice}</div>}
       
-      {screen === 'member' && <MemberDashboard member={currentMember} transactions={memberTransactions} allTransactions={transactions} loans={memberLoans} members={members} />}
+      {screen === 'member' && <MemberDashboard member={currentMember} transactions={memberTransactions} allTransactions={transactions} loans={memberLoans} members={members} go={setScreen} />}
       
-      {screen === 'treasurer' && <TreasurerPanel members={members} pendingLoans={pendingLoans} approveLoan={treasurerApproveLoan} rejectLoan={rejectLoan} go={setScreen} />}
+      {screen === 'treasurer' && <TreasurerPanel members={members} pendingLoans={pendingLoans} pendingContributions={pendingContributions} approveLoan={treasurerApproveLoan} rejectLoan={rejectLoan} confirmContribution={confirmContribution} rejectContributionReq={rejectContributionReq} applyPenaltySweep={applyPenaltySweep} go={setScreen} />}
       
       {screen === 'admin' && <AdminPanel members={members} treasurerApprovedLoans={treasurerApprovedLoans} approveLoan={adminApproveLoan} rejectLoan={rejectLoan} go={setScreen} inviteCode={inviteCode} />}
       
+      {screen === 'superadmin' && <SuperAdminDashboard token={token} apiFetch={apiFetch} />}
+      
       {screen === 'recordContribution' && <FormScreen title="Record Contribution" onBack={() => setScreen('treasurer')} onSubmit={recordContribution} successText="Confirmation message will appear here"><MemberSelect members={members} /><label>Contribution Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="5000" /></label><label>Date<input name="date" defaultValue={new Date().toISOString().slice(0, 10)} /></label><label>Description<input name="description" defaultValue="Monthly contribution" /></label></FormScreen>}
       
+      {screen === 'submitContribution' && <FormScreen title="Contribute" onBack={() => setScreen('member')} onSubmit={submitContributionRequestAction} submitText="Request Approval" successText="Your request is pending treasurer approval."><label>Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="2000" /></label><label>Cycle (Optional)<input name="cycle" defaultValue="July 2026" /></label><div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}><button type="button" onClick={(e) => { e.preventDefault(); submitMpesaContribution(e.target.form).then(setNotice).catch(err => setNotice(err.message)); }} style={{ background: '#4CAF50', color: 'white' }}>Pay instantly via M-Pesa</button></div></FormScreen>}
+
       {screen === 'requestLoan' && <FormScreen title="Request Loan" onBack={() => setScreen('member')} onSubmit={requestLoanAction} successText="Loan request status will appear here"><label>Principal Amount (KSH)<input name="principalAmount" defaultValue="10000" /></label><label>Interest Rate<input name="interestRate" defaultValue="0.10" /></label><label>Due Date<input name="dueDate" type="date" defaultValue="2026-07-15" /></label><label>Description<input name="description" defaultValue="Emergency loan request" /></label></FormScreen>}
       
       {screen === 'repayment' && <RepaymentScreen loans={loans} members={members} onSubmit={recordRepayment} onBack={() => setScreen('treasurer')} />}
       
       {screen === 'members' && <MembersScreen members={members} addMember={addMember} />}
       
-      {screen === 'ledger' && <LedgerScreen members={members} transactions={transactions} loans={loans} />}
+      {screen === 'reports' && <ReportsScreen token={token} apiFetch={apiFetch} members={members} transactions={transactions} loans={loans} />}
       
       {screen === 'sms' && <SmsScreen members={members} sendSms={sendSms} />}
     </>}
   </main>;
 }
 
-function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMember, setPendingFullName }) {
-  const [fullName, setFullName] = useState('');
+function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMember }) {
   const [phoneNumber, setPhoneNumber] = useState('+254');
   const [verificationId, setVerificationId] = useState('');
   const [code, setCode] = useState('');
@@ -275,6 +359,9 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
     setLoading(true);
     setError('');
     try {
+      if (!window.recaptchaVerifier) {
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', { size: 'invisible' });
+      }
       const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, window.recaptchaVerifier);
       window.confirmationResult = confirmationResult;
       setVerificationId(confirmationResult.verificationId);
@@ -304,7 +391,6 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
     try {
       const token = await firebaseUser.getIdToken();
       setToken(token);
-      setPendingFullName(fullName);
       localStorage.setItem('chamaToken', token);
       
       // Let the main App's refreshData handle the profile check and routing
@@ -312,6 +398,22 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
       
     } catch (e) {
       setError('Login succeeded but could not reach the server: ' + e.message + '. Make sure the backend is running and your phone is on the same WiFi as your PC.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMockLogin(phone) {
+    setLoading(true);
+    setError('');
+    try {
+      const mockToken = 'mock_' + phone;
+      localStorage.setItem('chamaToken', mockToken);
+      setToken(mockToken);
+      // The parent App's useEffect([token]) will call refreshData 
+      // and route based on the profile returned by the backend.
+    } catch (e) {
+      setError('Mock login failed: ' + e.message);
     } finally {
       setLoading(false);
     }
@@ -325,9 +427,8 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
     
     {!verificationId ? (
       <>
-        <label>Full Legal Name<input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="e.g. John Doe" /></label>
         <label>Phone Number<input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+254 000 000 000" /></label>
-        <button className="primary bottom-action" onClick={handleSendOtp} disabled={loading || fullName.trim().length < 2}>{loading ? 'Sending OTP...' : 'Send Login Code'}</button>
+        <button className="primary bottom-action" onClick={handleSendOtp} disabled={loading || phoneNumber.trim().length < 9}>{loading ? 'Sending OTP...' : 'Send Login Code'}</button>
       </>
     ) : (
       <>
@@ -337,13 +438,24 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
     )}
     
     {error && <div style={{color: 'red', marginTop: 10}}>{error}</div>}
+
+    <div style={{ marginTop: '20px', borderTop: '1px dashed #ccc', paddingTop: '15px', textAlign: 'center' }}>
+      <p style={{ fontSize: '12px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#666' }}>Developer Mock Login (No Firebase Billing required)</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+        <button type="button" onClick={() => handleMockLogin('+254799000000')} style={{ fontSize: '11px', padding: '6px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px' }}>SuperAdmin</button>
+        <button type="button" onClick={() => handleMockLogin('+254700000001')} style={{ fontSize: '11px', padding: '6px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px' }}>Treasurer</button>
+        <button type="button" onClick={() => handleMockLogin('+254700000002')} style={{ fontSize: '11px', padding: '6px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '4px' }}>Member</button>
+        <button type="button" onClick={() => handleMockLogin('+254755000000')} style={{ fontSize: '11px', padding: '6px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '4px' }}>New User (Onboard)</button>
+      </div>
+    </div>
   </div>;
 }
 
 function TopBar({ screen, role, setScreen, currentMember, loading, onLogout }) {
-  const titles = { member: 'Chama System', admin: 'Admin Panel', treasurer: 'Treasurer Panel', recordContribution: 'Record Contribution', requestLoan: 'Request Loan', repayment: 'Record Repayment', members: 'Members', ledger: 'Shared Ledger', sms: 'SMS Test' };
+  const titles = { member: 'Chama System', superadmin: 'Platform Admin', admin: 'Admin Panel', treasurer: 'Treasurer Panel', submitContribution: 'Contribute', recordContribution: 'Record Contribution', requestLoan: 'Request Loan', repayment: 'Record Repayment', members: 'Members', reports: 'Financial Reports', sms: 'SMS Test' };
   
   function getHome() {
+    if (role === 'SUPERADMIN') return 'superadmin';
     if (role === 'ADMIN') return 'admin';
     if (role === 'TREASURER') return 'treasurer';
     return 'member';
@@ -360,8 +472,8 @@ function TopBar({ screen, role, setScreen, currentMember, loading, onLogout }) {
   </header>;
 }
 
-function MemberDashboard({ member, transactions, allTransactions, loans, members }) {
-  const activeLoan = loans.find((loan) => ['ACTIVE', 'OVERDUE'].includes(loan.status));
+function MemberDashboard({ member, transactions, allTransactions, loans, members, go }) {
+  const activeLoan = loans.find((loan) => loan.memberId === member.id && ['ACTIVE', 'OVERDUE'].includes(loan.status));
   const totalContributions = transactions.filter((tx) => tx.transactionType === 'CONTRIBUTION').reduce((sum, tx) => sum + Number(tx.amount), 0);
   return <div className="screen-stack">
     <section className="wire-card">
@@ -369,6 +481,7 @@ function MemberDashboard({ member, transactions, allTransactions, loans, members
       <h1>{money(member.accountBalance)}</h1>
       <div className="line" />
       <p>Total Contributions: {money(totalContributions)}</p>
+      <button style={{marginTop: 15}} className="primary" onClick={() => go('submitContribution')}>Make Contribution</button>
     </section>
     <section className="wire-card two-col">
       <div>
@@ -388,14 +501,27 @@ function MemberDashboard({ member, transactions, allTransactions, loans, members
   </div>;
 }
 
-function TreasurerPanel({ members, pendingLoans, approveLoan, rejectLoan, go }) {
+function TreasurerPanel({ members, pendingLoans, pendingContributions, approveLoan, rejectLoan, confirmContribution, rejectContributionReq, applyPenaltySweep, go }) {
   return <div className="screen-stack">
     <div className="action-grid">
       <ActionTile icon="+" label="Record Contribution" onClick={() => go('recordContribution')} />
       <ActionTile icon="R" label="Record Repayment" onClick={() => go('repayment')} />
-      <ActionTile icon="!" label="Apply Penalty" onClick={() => {}} />
-      <ActionTile icon="=" label="Reports" onClick={() => {}} />
+      <ActionTile icon="!" label="Apply Penalty" onClick={applyPenaltySweep} />
+      <ActionTile icon="=" label="Reports" onClick={() => go('reports')} />
     </div>
+
+    <section className="wire-card">
+      <p className="eyebrow strong">Pending Contributions</p>
+      {(!pendingContributions || pendingContributions.length === 0) && <p>No pending contributions.</p>}
+      {pendingContributions && pendingContributions.map((req) => <div className="queue-row" key={req.id}>
+        <div><strong>{req.memberName}</strong><p>{money(req.amount)}</p><p style={{fontSize: 10}}>{req.cycle || 'No cycle'}</p></div>
+        <div className="right">
+          <button onClick={() => confirmContribution(req.id)}>Confirm</button>
+          <button style={{background: 'var(--danger)', color: 'white', marginTop: 4}} onClick={() => rejectContributionReq(req.id)}>Reject</button>
+        </div>
+      </div>)}
+    </section>
+
     <section className="wire-card">
       <p className="eyebrow strong">Pending Loans (Treasurer Initial Approval)</p>
       {pendingLoans.length === 0 && <p>No pending loan requests.</p>}
@@ -467,8 +593,110 @@ function MembersScreen({ members, addMember }) {
   return <div className="screen-stack"><section className="wire-card"><p className="eyebrow strong">Member Directory</p>{members.map((member) => <div className="queue-row" key={member.id}><div><strong>{member.fullName}</strong><p>{member.phoneNumber}</p></div><div className="right"><p>{member.role}</p><p>{money(member.accountBalance)}</p></div></div>)}</section><FormPanel submitText="Create Member" onSubmit={addMember}><label>Full Name<input name="fullName" defaultValue="David Kamau" /></label><label>Phone Number<input name="phoneNumber" defaultValue="+254700000005" /></label><label>Email<input name="email" defaultValue="david@example.com" /></label><label>Role<select name="role" defaultValue="MEMBER"><option>MEMBER</option><option>TREASURER</option><option>ADMIN</option></select></label><label>Opening Balance<input name="accountBalance" defaultValue="0.00" /></label></FormPanel></div>;
 }
 
-function LedgerScreen({ members, transactions, loans }) {
-  return <div className="screen-stack"><section className="wire-card"><p className="eyebrow strong">Transaction Ledger</p>{transactions.map((tx) => <div className="queue-row" key={tx.id}><div><strong>{getMemberName(members, tx.memberId)}</strong><p>{tx.description || tx.transactionType}</p></div><div className="right"><p>{money(tx.amount)}</p><p>{shortDate(tx.timestamp)}</p></div></div>)}</section><section className="wire-card"><p className="eyebrow strong">Loans</p>{loans.map((loan) => <div className="queue-row" key={loan.id}><div><strong>{getMemberName(members, loan.memberId)}</strong><p>{loan.status} / due {loan.dueDate}</p></div><div className="right"><p>{money(loan.totalRepayable)}</p><p>Paid {money(loan.amountPaid)}</p></div></div>)}</section></div>;
+function ReportsScreen({ token, apiFetch, members, transactions, loans }) {
+  const [activeTab, setActiveTab] = useState('summary');
+  const [summary, setSummary] = useState(null);
+  const [matrix, setMatrix] = useState([]);
+  const [loanBook, setLoanBook] = useState(null);
+
+  useEffect(() => {
+    async function fetchReports() {
+      try {
+        if (activeTab === 'summary' && !summary) {
+          const s = await apiFetch('/api/reports/summary', { token });
+          setSummary(s);
+        } else if (activeTab === 'contributions' && matrix.length === 0) {
+          const m = await apiFetch('/api/reports/matrix', { token });
+          setMatrix(m);
+        } else if (activeTab === 'loans' && !loanBook) {
+          const l = await apiFetch('/api/reports/loanbook', { token });
+          setLoanBook(l);
+        }
+      } catch (err) {
+        console.error('Failed to fetch reports', err);
+      }
+    }
+    fetchReports();
+  }, [activeTab, token, summary, matrix.length, loanBook, apiFetch]);
+
+  return <div className="screen-stack">
+    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', padding: '10px 0' }}>
+      <button className={activeTab === 'summary' ? 'primary' : ''} onClick={() => setActiveTab('summary')}>Summary</button>
+      <button className={activeTab === 'contributions' ? 'primary' : ''} onClick={() => setActiveTab('contributions')}>Contributions</button>
+      <button className={activeTab === 'loans' ? 'primary' : ''} onClick={() => setActiveTab('loans')}>Loan Book</button>
+      <button className={activeTab === 'ledger' ? 'primary' : ''} onClick={() => setActiveTab('ledger')}>Ledger</button>
+    </div>
+
+    {activeTab === 'summary' && summary && (
+      <div className="screen-stack">
+        <section className="wire-card">
+          <p className="eyebrow strong">Group Financial Health</p>
+          <h2>{money(summary.totalCollected)}</h2>
+          <p>Total Contributions</p>
+          <hr style={{ margin: '10px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.1)' }} />
+          <h2>{money(summary.totalOutstandingLoans)}</h2>
+          <p>Active & Overdue Loans</p>
+          <hr style={{ margin: '10px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.1)' }} />
+          <h2>{money(summary.totalLoanRepayments)}</h2>
+          <p>Total Repayments</p>
+        </section>
+      </div>
+    )}
+
+    {activeTab === 'contributions' && matrix.length > 0 && (
+      <div className="screen-stack">
+        <section className="wire-card">
+          <p className="eyebrow strong">Member Contributions</p>
+          {matrix.map(m => (
+            <div className="queue-row" key={m.memberId}>
+              <div><strong>{m.fullName}</strong><p>Balance: {money(m.balance)}</p></div>
+              <div className="right">
+                <strong>{money(m.totalContributions)}</strong>
+                <p style={{ fontSize: 10 }}>lifetime</p>
+              </div>
+            </div>
+          ))}
+        </section>
+      </div>
+    )}
+
+    {activeTab === 'loans' && loanBook && (
+      <div className="screen-stack">
+        <section className="wire-card">
+          <p className="eyebrow strong">Loan Book Overview</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 15 }}>
+            <div><strong>Active</strong><br/>{loanBook.active}</div>
+            <div><strong>Overdue</strong><br/>{loanBook.overdue}</div>
+            <div><strong>Paid</strong><br/>{loanBook.paid}</div>
+            <div><strong>Pending</strong><br/>{loanBook.pending}</div>
+          </div>
+          {loanBook.loans.map(l => (
+            <div className="queue-row" key={l.id}>
+              <div><strong>{l.memberName}</strong><p>{l.status} / due {shortDate(l.dueDate)}</p></div>
+              <div className="right">
+                <p>{money(l.totalRepayable)}</p>
+                <p style={{ fontSize: 10 }}>Paid {money(l.amountPaid)}</p>
+              </div>
+            </div>
+          ))}
+        </section>
+      </div>
+    )}
+
+    {activeTab === 'ledger' && (
+      <div className="screen-stack">
+        <section className="wire-card">
+          <p className="eyebrow strong">Transaction Ledger</p>
+          {transactions.map((tx) => (
+            <div className="queue-row" key={tx.id}>
+              <div><strong>{getMemberName(members, tx.memberId)}</strong><p>{tx.description || tx.transactionType}</p></div>
+              <div className="right"><p>{money(tx.amount)}</p><p>{shortDate(tx.timestamp)}</p></div>
+            </div>
+          ))}
+        </section>
+      </div>
+    )}
+  </div>;
 }
 
 function SmsScreen({ members, sendSms }) {
@@ -478,6 +706,55 @@ function SmsScreen({ members, sendSms }) {
 function FormPanel({ children, onSubmit, submitText }) {
   const [message, setMessage] = useState('');
   return <form className="wire-card mini-form" onSubmit={async (event) => { event.preventDefault(); try { setMessage(await onSubmit(event.currentTarget)); } catch (error) { setMessage(error.message); } }}>{children}<button className="primary">{submitText}</button>{message && <div className="confirmation">{message}</div>}</form>;
+}
+
+function SuperAdminDashboard({ token, apiFetch }) {
+  const [chamas, setChamas] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const c = await apiFetch('/api/superadmin/chamas', { token });
+        const m = await apiFetch('/api/superadmin/members', { token });
+        setChamas(c || []);
+        setMembers(m || []);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [token]);
+
+  if (loading) return <div className="shell">Loading platform data...</div>;
+  if (error) return <div className="notice">{error}</div>;
+
+  return <div className="screen-stack">
+    <section className="wire-card">
+      <p className="eyebrow strong">Platform Overview</p>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div><strong>Total Chamas</strong><p>{chamas.length}</p></div>
+        <div><strong>Total Members</strong><p>{members.length}</p></div>
+      </div>
+    </section>
+    
+    <section className="wire-card">
+      <p className="eyebrow strong">All Chamas</p>
+      {chamas.map(g => (
+        <div className="queue-row" key={g.id}>
+          <div><strong>{g.name}</strong><p>{g.memberCount} members</p></div>
+          <div className="right">
+            <p>{money(g.totalContributions)}</p>
+            <p style={{ fontSize: 10 }}>{g.id}</p>
+          </div>
+        </div>
+      ))}
+    </section>
+  </div>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS "Group" (
     inviteCode TEXT UNIQUE NOT NULL,
     contributionAmount TEXT NOT NULL,
     contributionFrequency TEXT NOT NULL,
+    penaltyPercentage TEXT DEFAULT '0',
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL,
     auditSignature TEXT NOT NULL
@@ -20,7 +21,7 @@ CREATE TABLE IF NOT EXISTS "Group" (
 
 CREATE TABLE IF NOT EXISTS "Member" (
     id TEXT PRIMARY KEY,
-    groupId TEXT NOT NULL,
+    groupId TEXT,
     fullName TEXT NOT NULL,
     phoneNumber TEXT NOT NULL,
     email TEXT,
@@ -89,14 +90,17 @@ CREATE TABLE IF NOT EXISTS "Notification" (
 CREATE TABLE IF NOT EXISTS "Penalty" (
     id TEXT PRIMARY KEY,
     memberId TEXT NOT NULL,
+    groupId TEXT NOT NULL,
     amount TEXT NOT NULL,
     reason TEXT NOT NULL,
+    cycle TEXT,
     appliedAt TEXT NOT NULL,
     settled INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL,
     auditSignature TEXT NOT NULL,
-    FOREIGN KEY (memberId) REFERENCES "Member"(id) ON DELETE RESTRICT
+    FOREIGN KEY (memberId) REFERENCES "Member"(id) ON DELETE RESTRICT,
+    FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "pending_notifications" (
@@ -122,3 +126,19 @@ BEFORE DELETE ON "Transaction"
 BEGIN
     SELECT RAISE(FAIL, 'Transactions are immutable and cannot be deleted.');
 END;
+
+CREATE TABLE IF NOT EXISTS "ContributionRequest" (
+    id TEXT PRIMARY KEY,
+    memberId TEXT NOT NULL,
+    groupId TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    cycle TEXT,
+    status TEXT DEFAULT 'PENDING',
+    rejectionReason TEXT,
+    createdAt TEXT NOT NULL,
+    confirmedAt TEXT,
+    confirmedBy TEXT,
+    FOREIGN KEY (memberId) REFERENCES "Member"(id) ON DELETE CASCADE,
+    FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE,
+    FOREIGN KEY (confirmedBy) REFERENCES "Member"(id) ON DELETE SET NULL
+);

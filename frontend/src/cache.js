@@ -33,3 +33,18 @@ export function cacheInvalidate(key) {
     console.error('Cache invalidate failed', e);
   }
 }
+
+export function cacheClearAll() {
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('chama_cache_')) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+  } catch (e) {
+    console.error('Cache clear all failed', e);
+  }
+}

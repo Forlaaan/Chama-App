@@ -665,6 +665,13 @@ function getLoansByMember(memberId, authUser) {
   return rows.map(normalizeLoan);
 }
 
+// ─── GET all loans for a group ────────────────────────────────────────────────
+function getLoansByGroup(groupId, authUser) {
+  requireLinkedMember(authUser);
+  const rows = db.prepare('SELECT * FROM "Loan" WHERE groupId = ? ORDER BY createdAt DESC').all(groupId);
+  return rows.map(normalizeLoan);
+}
+
 module.exports = {
   requestLoan,
   treasurerApproveLoan,
@@ -674,4 +681,5 @@ module.exports = {
   getOverdueLoans,
   getLoanById,
   getLoansByMember,
+  getLoansByGroup,
 };
