@@ -1,53 +1,114 @@
-const firebaseAuthService = require('../services/firebaseAuth.service');
-const memberService = require('../services/member.service');
 const { randomUUID } = require('crypto');
 const { db } = require('../config/database');
 const { AppError } = require('../utils/errors');
+const memberService = require('../services/member.service');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const { JWT_SECRET } = require('../middleware/jwtAuth');
+
+// Hash cost factor
+const SALT_ROUNDS = 10;
 
 async function register(req, res) {
-  const input = req.validated.body;
-  const firebaseUser = await firebaseAuthService.registerWithEmailPassword(input);
+  const { phoneNumber, pin, fullName, action, inviteCode, groupName, groupDescription } = req.validated.body;
 
-  let member = null;
-  if (input.groupId && input.fullName && input.phoneNumber) {
-    member = memberService.createMember({
-      groupId: input.groupId,
-      fullName: input.fullName,
-      phoneNumber: input.phoneNumber,
-      email: input.email,
-      role: input.role,
-      accountBalance: '0.00'
-    });
+  if (!phoneNumber || !pin || pin.length !== 6) {
+    throw new AppError('Phone number and a 6-digit PIN are required', 400);
   }
+
+  // Check if member already exists
+  const existingMember = db.prepare('SELECT id FROM "Member" WHERE phoneNumber = ?').get(phoneNumber);
+  if (existingMember) {
+    throw new AppError('A user with this phone number already exists.', 400);
+  }
+
+  let groupId = null;
+  let assignedRole = 'MEMBER';
+  let groupInviteCode = null;
+
+  if (action === 'CREATE') {
+    groupId = 'group_' + randomUUID();
+    groupInviteCode = 'CHM-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    assignedRole = 'ADMIN';
+
+    const now = new Date().toISOString();
+    
+    db.prepare(`
+      INSERT INTO "Group" (id, name, description, inviteCode, contributionAmount, contributionFrequency, createdAt, updatedAt, auditSignature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      groupId, 
+      groupName || 'New Chama', 
+      groupDescription || '', 
+      groupInviteCode, 
+      '5000', 
+      'MONTHLY', 
+      now, 
+      now, 
+      'audit_sig'
+    );
+  } else if (action === 'JOIN') {
+    if (!inviteCode) throw new AppError('Invite code is required to join.', 400);
+    const group = db.prepare('SELECT id, inviteCode FROM "Group" WHERE inviteCode = ?').get(inviteCode);
+    
+    if (!group) {
+      throw new AppError('Invalid or unrecognized invite code.', 404);
+    }
+    
+    groupId = group.id;
+    groupInviteCode = group.inviteCode;
+  }
+
+  const uid = 'usr_' + randomUUID();
+  const passwordHash = await bcrypt.hash(pin, SALT_ROUNDS);
+
+  // Directly insert member since we need passwordHash which memberService.createMember doesn't expect yet
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO "Member" (id, groupId, fullName, phoneNumber, email, passwordHash, role, accountBalance, createdAt, updatedAt, auditSignature)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(uid, groupId, fullName, phoneNumber, null, passwordHash, assignedRole, '0', now, now, 'audit_sig');
+
+  const member = memberService.normalizeMember ? memberService.normalizeMember({ id: uid, groupId, fullName, phoneNumber, role: assignedRole, accountBalance: '0' }) : { id: uid, role: assignedRole };
+
+  // Generate JWT token
+  const token = jwt.sign({ uid, phoneNumber }, JWT_SECRET, { expiresIn: '30d' });
 
   res.status(201).json({
     success: true,
-    message: 'User registered with Firebase Authentication',
+    message: 'User registered successfully',
     data: {
-      firebase: {
-        uid: firebaseUser.localId,
-        email: firebaseUser.email,
-        idToken: firebaseUser.idToken,
-        refreshToken: firebaseUser.refreshToken,
-        expiresIn: firebaseUser.expiresIn
-      },
-      member
+      token,
+      member,
+      inviteCode: groupInviteCode
     }
   });
 }
 
 async function login(req, res) {
-  const firebaseUser = await firebaseAuthService.loginWithEmailPassword(req.validated.body);
+  const { phoneNumber, pin } = req.validated.body;
+
+  if (!phoneNumber || !pin) {
+    throw new AppError('Phone number and PIN are required', 400);
+  }
+
+  const row = db.prepare('SELECT * FROM "Member" WHERE phoneNumber = ?').get(phoneNumber);
+  if (!row) {
+    throw new AppError('Invalid phone number or PIN', 401);
+  }
+
+  const isMatch = await bcrypt.compare(pin, row.passwordHash);
+  if (!isMatch) {
+    throw new AppError('Invalid phone number or PIN', 401);
+  }
+
+  const token = jwt.sign({ uid: row.id, phoneNumber: row.phoneNumber }, JWT_SECRET, { expiresIn: '30d' });
 
   res.json({
     success: true,
-    message: 'Firebase login successful',
+    message: 'Login successful',
     data: {
-      uid: firebaseUser.localId,
-      email: firebaseUser.email,
-      idToken: firebaseUser.idToken,
-      refreshToken: firebaseUser.refreshToken,
-      expiresIn: firebaseUser.expiresIn
+      token
     }
   });
 }
@@ -64,103 +125,27 @@ async function getProfile(req, res) {
   res.json({
     success: true,
     data: {
-      firebaseUser: {
-        uid: req.user.uid,
-        email: req.user.email,
-        phoneNumber: req.user.phoneNumber
-      },
       member,
       inviteCode
     }
   });
 }
 
+// Keeping this purely for backwards compatibility if any route expects it, but we should just use login
 async function verifyToken(req, res) {
-  const decoded = await firebaseAuthService.verifyIdToken(req.validated.body.idToken);
-  const member = await memberService.findMemberForFirebaseUser(decoded);
-
   res.json({
     success: true,
-    message: 'Firebase token is valid',
+    message: 'Token is valid',
     data: {
-      uid: decoded.uid,
-      email: decoded.email,
-      member
+      uid: req.user.uid,
+      member: req.user.member
     }
   });
 }
 
 async function onboard(req, res) {
-  const { fullName, action, inviteCode, groupName, groupDescription } = req.validated.body;
-  const uid = req.user.uid;
-  const phoneNumber = req.user.phoneNumber;
-
-  if (!phoneNumber) {
-    throw new AppError('Phone number not found in authentication token.', 400);
-  }
-
-  // Prevent double-onboarding
-  if (req.user.member) {
-    throw new AppError('User is already registered to a group.', 400);
-  }
-
-  let groupId;
-  let assignedRole;
-  let groupInviteCode;
-
-  if (action === 'CREATE') {
-    groupId = 'group_' + randomUUID();
-    // Generate a 6-character random alphanumeric invite code
-    groupInviteCode = 'CHM-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    assignedRole = 'ADMIN';
-
-    const now = new Date().toISOString();
-    
-    db.prepare(`
-      INSERT INTO "Group" (id, name, description, inviteCode, contributionAmount, contributionFrequency, createdAt, updatedAt, auditSignature)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      groupId, 
-      groupName, 
-      groupDescription || '', 
-      groupInviteCode, 
-      '5000', 
-      'MONTHLY', 
-      now, 
-      now, 
-      'audit_sig'
-    );
-
-  } else if (action === 'JOIN') {
-    const group = db.prepare('SELECT id, inviteCode FROM "Group" WHERE inviteCode = ?').get(inviteCode);
-    
-    if (!group) {
-      throw new AppError('Invalid or unrecognized invite code.', 404);
-    }
-    
-    groupId = group.id;
-    groupInviteCode = group.inviteCode;
-    assignedRole = 'MEMBER';
-  }
-
-  // Create the new member record linked to the Firebase UID
-  const member = memberService.createMember({
-    id: uid,
-    groupId,
-    fullName,
-    phoneNumber,
-    role: assignedRole,
-    accountBalance: '0.00'
-  });
-
-  res.status(201).json({
-    success: true,
-    message: action === 'CREATE' ? 'Chama created and user registered' : 'Joined Chama successfully',
-    data: {
-      member,
-      inviteCode: groupInviteCode
-    }
-  });
+  throw new AppError('Onboarding endpoint is deprecated. Use POST /api/auth/register instead.', 400);
 }
 
 module.exports = { register, login, getProfile, verifyToken, onboard };
+

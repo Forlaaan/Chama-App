@@ -10,7 +10,7 @@
 const router             = require('express').Router();
 const loanController     = require('../controllers/loan.controller');
 const { asyncHandler }   = require('../utils/asyncHandler');
-const { verifyFirebaseToken } = require('../middleware/firebaseAuth');
+const { verifyToken } = require('../middleware/jwtAuth');
 const { requireRole }    = require('../middleware/requireRole');
 const { validateRequest } = require('../middleware/validateRequest');
 const {
@@ -24,7 +24,7 @@ const {
 } = require('../validators/loan.validator');
 
 // All loan routes require a valid Firebase bearer token
-router.use(verifyFirebaseToken);
+router.use(verifyToken);
 
 // ─── GET /api/loans ────────────────────────────────────────────────────────────
 // Retrieve all loans for the current user's group.

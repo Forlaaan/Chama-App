@@ -26,14 +26,5 @@ const testPhone = '+254111508429';
 const match = members.find(m => m.phoneNumber === testPhone);
 console.log('\nPhone match for', testPhone, ':', match ? `YES (${match.fullName}, role: ${match.role})` : 'NO MATCH - LOGIN WILL FAIL!');
 
-// 5. Quick Firebase Admin SDK check
-try {
-  const { firebaseAdmin } = require(path.resolve(__dirname, '..', 'src', 'config', 'firebase'));
-  console.log('\nFirebase Admin SDK initialized:', firebaseAdmin.apps.length > 0 ? 'YES' : 'NO');
-  console.log('Project ID:', firebaseAdmin.app().options.credential.projectId || 'unknown');
-} catch (e) {
-  console.error('\nFirebase Admin SDK ERROR:', e.message);
-}
-
 db.close();
 console.log('\n=== Health Check Complete ===');

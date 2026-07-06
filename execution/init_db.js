@@ -77,15 +77,18 @@ try {
   const alphaJohn = 'member_john';
   const alphaJane = 'member_jane';
 
+  const bcrypt = require('bcrypt');
+  const defaultHash = bcrypt.hashSync('123456', 10);
+
   const insertMember = db.prepare(`
     INSERT INTO "Member" (id, groupId, fullName, phoneNumber, email, passwordHash, role, accountBalance, createdAt, updatedAt, auditSignature)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  insertMember.run(alphaAdmin, alphaId, 'Admin User', '+254111508429', 'admin@alpha.com', 'none', 'ADMIN', '15000', getPastDate(90), now, 'seed');
-  insertMember.run(alphaTreasurer, alphaId, 'Treasurer User', '+254700000001', 'treasurer@alpha.com', 'none', 'TREASURER', '15000', getPastDate(90), now, 'seed');
-  insertMember.run(alphaJohn, alphaId, 'John Member', '+254700000002', 'john@alpha.com', 'none', 'MEMBER', '15000', getPastDate(90), now, 'seed');
-  insertMember.run(alphaJane, alphaId, 'Jane Member', '+254700000003', 'jane@alpha.com', 'none', 'MEMBER', '15000', getPastDate(90), now, 'seed');
+  insertMember.run(alphaAdmin, alphaId, 'Admin User', '+254111508429', 'admin@alpha.com', defaultHash, 'ADMIN', '15000', getPastDate(90), now, 'seed');
+  insertMember.run(alphaTreasurer, alphaId, 'Treasurer User', '+254700000001', 'treasurer@alpha.com', defaultHash, 'TREASURER', '15000', getPastDate(90), now, 'seed');
+  insertMember.run(alphaJohn, alphaId, 'John Member', '+254700000002', 'john@alpha.com', defaultHash, 'MEMBER', '15000', getPastDate(90), now, 'seed');
+  insertMember.run(alphaJane, alphaId, 'Jane Member', '+254700000003', 'jane@alpha.com', defaultHash, 'MEMBER', '15000', getPastDate(90), now, 'seed');
 
   // Seed Contributions (3 months for each)
   const insertTx = db.prepare(`
@@ -137,9 +140,9 @@ try {
   const betaTreasurer = 'treasurer_beta';
   const betaMember = 'member_beta';
 
-  insertMember.run(betaAdmin, betaId, 'Beta Admin', '+254711000001', 'admin@beta.com', 'none', 'ADMIN', '8000', getPastDate(30), now, 'seed');
-  insertMember.run(betaTreasurer, betaId, 'Beta Treasurer', '+254711000002', 'treasurer@beta.com', 'none', 'TREASURER', '8000', getPastDate(30), now, 'seed');
-  insertMember.run(betaMember, betaId, 'Beta Member', '+254711000099', 'member@beta.com', 'none', 'MEMBER', '8000', getPastDate(30), now, 'seed');
+  insertMember.run(betaAdmin, betaId, 'Beta Admin', '+254711000001', 'admin@beta.com', defaultHash, 'ADMIN', '8000', getPastDate(30), now, 'seed');
+  insertMember.run(betaTreasurer, betaId, 'Beta Treasurer', '+254711000002', 'treasurer@beta.com', defaultHash, 'TREASURER', '8000', getPastDate(30), now, 'seed');
+  insertMember.run(betaMember, betaId, 'Beta Member', '+254711000099', 'member@beta.com', defaultHash, 'MEMBER', '8000', getPastDate(30), now, 'seed');
 
   // Seed Contributions (4 weeks for each)
   const betaMembers = [betaAdmin, betaTreasurer, betaMember];
@@ -157,7 +160,7 @@ try {
 
   // --- 3. SuperAdmin ---
   const superAdminId = 'superadmin_1';
-  insertMember.run(superAdminId, null, 'Platform SuperAdmin', '+254799000000', 'super@platform.com', 'none', 'SUPERADMIN', '0', getPastDate(1), now, 'seed');
+  insertMember.run(superAdminId, null, 'Platform SuperAdmin', '+254799000000', 'super@platform.com', defaultHash, 'SUPERADMIN', '0', getPastDate(1), now, 'seed');
 
   console.log('Seeded: Alpha Chama (ALPHA1), Beta Chama (BETA02), and Platform SuperAdmin.');
 } catch (err) {

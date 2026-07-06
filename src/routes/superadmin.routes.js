@@ -1,16 +1,17 @@
 const express = require('express');
 const router = express.Router();
 
-const { verifyFirebaseToken } = require('../middleware/firebaseAuth');
+const { verifyToken } = require('../middleware/jwtAuth');
 const { requireRole } = require('../middleware/requireRole');
+const { asyncHandler } = require('../utils/asyncHandler');
 const superAdminController = require('../controllers/superadmin.controller');
 
-router.use(verifyFirebaseToken);
+router.use(verifyToken);
 router.use(requireRole('SUPERADMIN'));
 
-router.get('/chamas', superAdminController.getAllChamas);
-router.get('/members', superAdminController.getAllMembers);
-router.patch('/chamas/:id/deactivate', superAdminController.deactivateChama);
-router.post('/chamas/:id/impersonate', superAdminController.impersonateGroup);
+router.get('/chamas', asyncHandler(superAdminController.getAllChamas));
+router.get('/members', asyncHandler(superAdminController.getAllMembers));
+router.patch('/chamas/:id/deactivate', asyncHandler(superAdminController.deactivateChama));
+router.post('/chamas/:id/impersonate', asyncHandler(superAdminController.impersonateGroup));
 
 module.exports = router;

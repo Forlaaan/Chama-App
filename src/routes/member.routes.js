@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const memberController = require('../controllers/member.controller');
 const { asyncHandler } = require('../utils/asyncHandler');
-const { verifyFirebaseToken } = require('../middleware/firebaseAuth');
+const { verifyToken } = require('../middleware/jwtAuth');
 const { requireRole } = require('../middleware/requireRole');
 const { validateRequest } = require('../middleware/validateRequest');
 const {
@@ -10,7 +10,7 @@ const {
   memberIdSchema
 } = require('../validators/member.validator');
 
-router.use(verifyFirebaseToken);
+router.use(verifyToken);
 
 router.post('/', requireRole('ADMIN'), validateRequest(createMemberSchema), asyncHandler(memberController.createMember));
 router.get('/', asyncHandler(memberController.getAllMembers));

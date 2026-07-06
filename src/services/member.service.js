@@ -138,5 +138,6 @@ module.exports = {
   updateMember,
   getMemberBalance,
   getContributionHistory,
-  findMemberForFirebaseUser
+  findMemberForFirebaseUser,
+  normalizeMember
 };

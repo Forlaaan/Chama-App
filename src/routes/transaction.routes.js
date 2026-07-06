@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const transactionController = require('../controllers/transaction.controller');
 const { asyncHandler } = require('../utils/asyncHandler');
-const { verifyFirebaseToken } = require('../middleware/firebaseAuth');
+const { verifyToken } = require('../middleware/jwtAuth');
 const { requireRole } = require('../middleware/requireRole');
 const { validateRequest } = require('../middleware/validateRequest');
 const {
@@ -10,7 +10,7 @@ const {
   memberTransactionsSchema
 } = require('../validators/transaction.validator');
 
-router.use(verifyFirebaseToken);
+router.use(verifyToken);
 
 router.post('/contributions', requireRole('TREASURER'), validateRequest(contributionSchema), asyncHandler(transactionController.recordContribution));
 router.post('/repayments', requireRole('TREASURER'), validateRequest(repaymentSchema), asyncHandler(transactionController.recordRepayment));

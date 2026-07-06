@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const mpesaController = require('../controllers/mpesa.controller');
-const { verifyFirebaseToken } = require('../middleware/firebaseAuth');
+const { verifyToken } = require('../middleware/jwtAuth');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 // The STK push route requires authentication
-router.post('/stkpush', verifyFirebaseToken, mpesaController.initiateSTKPush);
+router.post('/stkpush', verifyToken, asyncHandler(mpesaController.initiateSTKPush));
 
 // The callback route does not require Firebase token as it comes from Safaricom
-router.post('/callback', mpesaController.mpesaCallback);
+router.post('/callback', asyncHandler(mpesaController.mpesaCallback));
 
 module.exports = router;

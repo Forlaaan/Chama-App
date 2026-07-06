@@ -9,7 +9,8 @@ const config: CapacitorConfig = {
     // The WebView serves the app from this scheme, so if it's 'https' and
     // our backend is plain HTTP, the browser engine silently blocks the fetch.
     // Change back to 'https' once the backend has a real SSL certificate.
-    androidScheme: 'http'
+    androidScheme: 'http',
+    cleartext: true
   }
 };
 

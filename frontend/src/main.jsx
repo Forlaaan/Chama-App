@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
-import { auth, RecaptchaVerifier, signInWithPhoneNumber } from './firebase';
 import { cacheGet, cacheSet, cacheClearAll } from './cache';
 import OnboardingScreen from './OnboardingScreen';
 
@@ -11,7 +10,8 @@ import { Capacitor } from '@capacitor/core';
 // e.g. VITE_API_BASE_URL=http://192.168.100.33:4000
 let defaultApiUrl = 'http://localhost:4000';
 if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-  defaultApiUrl = 'http://10.0.2.2:4000'; // Default Android Emulator host IP
+  // Use the host PC's actual LAN IP rather than 10.0.2.2 so it works on both physical devices and emulators
+  defaultApiUrl = 'http://192.168.100.31:4000';
 }
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || defaultApiUrl;
 
@@ -304,12 +304,14 @@ function App() {
   return <main className="shell">
     {!isOnline && <div style={{background: 'red', color: 'white', textAlign: 'center', padding: '4px'}}>You are currently offline</div>}
     
-    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} setToken={setToken} setScreen={setScreen} setCurrentMember={setCurrentMember} /> : 
-     screen === 'onboard' ? <OnboardingScreen token={token} apiFetch={apiFetch} onComplete={(member, code) => {
+    {screen === 'login' ? <LoginScreen language={language} setLanguage={setLanguage} setToken={setToken} setScreen={setScreen} /> : 
+     screen === 'onboard' ? <OnboardingScreen apiFetch={apiFetch} onCancel={() => setScreen('login')} onComplete={(newToken, member, code) => {
+        setToken(newToken);
+        localStorage.setItem('chamaToken', newToken);
         setCurrentMember(member);
         setInviteCode(code);
         setScreen(member.role === 'ADMIN' ? 'admin' : 'member');
-        refreshData(token);
+        refreshData(newToken);
      }} /> : <>
       <TopBar screen={screen} role={role} setScreen={setScreen} currentMember={currentMember} loading={loading} onLogout={handleLogout} />
       <nav className="tabs">{navItems.filter((item) => item.roles.includes(role)).map((item) => <button key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}>{item.label}</button>)}</nav>
@@ -340,80 +342,35 @@ function App() {
   </main>;
 }
 
-function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMember }) {
+function LoginScreen({ language, setLanguage, setToken, setScreen }) {
   const [phoneNumber, setPhoneNumber] = useState('+254');
-  const [verificationId, setVerificationId] = useState('');
-  const [code, setCode] = useState('');
+  const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        size: 'invisible'
-      });
-    }
-  }, []);
-
-  async function handleSendOtp() {
+  async function handleLogin(e) {
+    e.preventDefault();
     setLoading(true);
     setError('');
-    try {
-      if (!window.recaptchaVerifier) {
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', { size: 'invisible' });
-      }
-      const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, window.recaptchaVerifier);
-      window.confirmationResult = confirmationResult;
-      setVerificationId(confirmationResult.verificationId);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleVerifyOtp() {
-    setLoading(true);
-    setError('');
-    let firebaseUser = null;
     
-    // Step 1: Verify the OTP with Firebase (isolated so error message is accurate)
-    try {
-      const result = await window.confirmationResult.confirm(code);
-      firebaseUser = result.user;
-    } catch (e) {
-      setError('Incorrect verification code. Please try again.');
+    if (pin.length !== 6) {
+      setError('PIN must be exactly 6 digits.');
       setLoading(false);
       return;
     }
 
-    // Step 2: Exchange Firebase token for a backend session
     try {
-      const token = await firebaseUser.getIdToken();
+      const response = await apiFetch('/api/auth/login', {
+        method: 'POST',
+        body: { phoneNumber, pin }
+      });
+      
+      const token = response.token;
       setToken(token);
       localStorage.setItem('chamaToken', token);
       
-      // Let the main App's refreshData handle the profile check and routing
-      // It will fetch /api/auth/profile and route to 'onboard' if member is null.
-      
     } catch (e) {
-      setError('Login succeeded but could not reach the server: ' + e.message + '. Make sure the backend is running and your phone is on the same WiFi as your PC.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleMockLogin(phone) {
-    setLoading(true);
-    setError('');
-    try {
-      const mockToken = 'mock_' + phone;
-      localStorage.setItem('chamaToken', mockToken);
-      setToken(mockToken);
-      // The parent App's useEffect([token]) will call refreshData 
-      // and route based on the profile returned by the backend.
-    } catch (e) {
-      setError('Mock login failed: ' + e.message);
+      setError(e.message || 'Login failed.');
     } finally {
       setLoading(false);
     }
@@ -423,31 +380,20 @@ function LoginScreen({ language, setLanguage, setToken, setScreen, setCurrentMem
     <div className="language-row"><button className={language === 'ENG' ? 'solid' : ''} onClick={() => setLanguage('ENG')}>ENG</button><button className={language === 'SWA' ? 'solid' : ''} onClick={() => setLanguage('SWA')}>SWA</button></div>
     <section className="brand-box"><div className="brand-mark">CH</div><p>CHAMA HUB</p></section>
     
-    <div id="recaptcha-container"></div>
-    
-    {!verificationId ? (
-      <>
-        <label>Phone Number<input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+254 000 000 000" /></label>
-        <button className="primary bottom-action" onClick={handleSendOtp} disabled={loading || phoneNumber.trim().length < 9}>{loading ? 'Sending OTP...' : 'Send Login Code'}</button>
-      </>
-    ) : (
-      <>
-        <label>6-Digit Verification Code<input value={code} onChange={e => setCode(e.target.value)} maxLength="6" placeholder="123456" /></label>
-        <button className="primary bottom-action" onClick={handleVerifyOtp} disabled={loading}>{loading ? 'Verifying...' : 'Verify & Login'}</button>
-      </>
-    )}
-    
-    {error && <div style={{color: 'red', marginTop: 10}}>{error}</div>}
-
-    <div style={{ marginTop: '20px', borderTop: '1px dashed #ccc', paddingTop: '15px', textAlign: 'center' }}>
-      <p style={{ fontSize: '12px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#666' }}>Developer Mock Login (No Firebase Billing required)</p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
-        <button type="button" onClick={() => handleMockLogin('+254799000000')} style={{ fontSize: '11px', padding: '6px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px' }}>SuperAdmin</button>
-        <button type="button" onClick={() => handleMockLogin('+254700000001')} style={{ fontSize: '11px', padding: '6px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px' }}>Treasurer</button>
-        <button type="button" onClick={() => handleMockLogin('+254700000002')} style={{ fontSize: '11px', padding: '6px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '4px' }}>Member</button>
-        <button type="button" onClick={() => handleMockLogin('+254755000000')} style={{ fontSize: '11px', padding: '6px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '4px' }}>New User (Onboard)</button>
+    <form onSubmit={handleLogin}>
+      <label>Phone Number<input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+254 000 000 000" /></label>
+      
+      <label>6-Digit PIN<input type="password" inputMode="numeric" maxLength="6" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))} placeholder="123456" /></label>
+      
+      <button type="submit" className="primary bottom-action" disabled={loading || phoneNumber.trim().length < 9 || pin.length !== 6}>{loading ? 'Verifying...' : 'Secure Login'}</button>
+      
+      {error && <div style={{color: 'red', marginTop: 10}}>{error}</div>}
+      
+      <div style={{ marginTop: '20px', textAlign: 'center' }}>
+        <p style={{ fontSize: '14px', color: '#666' }}>Don't have an account?</p>
+        <button type="button" onClick={() => setScreen('onboard')} style={{ background: 'transparent', color: '#3b82f6', border: '1px solid #3b82f6', padding: '10px 20px', borderRadius: '4px', marginTop: '10px', width: '100%' }}>Register / Join Chama</button>
       </div>
-    </div>
+    </form>
   </div>;
 }
 

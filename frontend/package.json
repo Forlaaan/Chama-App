@@ -15,7 +15,6 @@
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "firebase": "^12.15.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.7.2",
