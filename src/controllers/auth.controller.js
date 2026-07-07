@@ -97,6 +97,10 @@ async function login(req, res) {
     throw new AppError('Invalid phone number or PIN', 401);
   }
 
+  if (row.status === 'DEACTIVATED') {
+    throw new AppError('Account has been deactivated', 403);
+  }
+
   const isMatch = await bcrypt.compare(pin, row.passwordHash);
   if (!isMatch) {
     throw new AppError('Invalid phone number or PIN', 401);

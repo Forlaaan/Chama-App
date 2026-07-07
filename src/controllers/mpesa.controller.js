@@ -46,23 +46,60 @@ async function mpesaCallback(req, res) {
     const pendingReq = db.prepare('SELECT * FROM "pending_notifications" WHERE id = ?').get(CheckoutRequestID);
     if (pendingReq) {
       const memberId = pendingReq.notificationId;
-      const type = pendingReq.phoneNumber; // Reference
+      const reference = pendingReq.phoneNumber; // Reference
       
       const member = db.prepare('SELECT * FROM "Member" WHERE id = ?').get(memberId);
       
       if (member) {
         // We need an actor (system or member themselves)
-        // Since it's a callback, we can use the member as the actor
         const actor = member;
         
-        if (type === 'CONTRIBUTION') {
-          // Record contribution directly via transactionService
-          // We can't easily call transactionService.recordContribution without a full authenticatedUser object 
-          // but we can fake one or call recordContributionInDatabase directly.
-          // For simplicity, let's just log it or simulate it if we exported recordContributionInDatabase.
-          console.log(`[M-PESA SUCCESS] Contribution of ${amount} applied for ${member.fullName}`);
-        } else if (type === 'REPAYMENT') {
-          console.log(`[M-PESA SUCCESS] Repayment of ${amount} applied for ${member.fullName}`);
+        try {
+          if (reference === 'CONTRIBUTION') {
+            transactionService.recordContributionInDatabase({ member, actor, amount, description: 'M-Pesa Contribution' });
+            console.log(`[M-PESA SUCCESS] Contribution of ${amount} applied for ${member.fullName}`);
+          } else if (reference.startsWith('REPAYMENT:')) {
+            const loanId = reference.split(':')[1];
+            transactionService.recordRepaymentInDatabase({ member, actor, amount, description: 'M-Pesa Loan Repayment', loanId });
+            console.log(`[M-PESA SUCCESS] Repayment of ${amount} applied for ${member.fullName}`);
+          } else if (reference.startsWith('PENALTY:')) {
+            const penaltyId = reference.split(':')[1];
+            const penaltyService = require('../services/penalty.service');
+            penaltyService.settlePenalty(penaltyId);
+            
+            // Record generic transaction for the penalty payment
+            const { randomUUID } = require('crypto');
+            const { auditSignature } = require('../utils/audit');
+            const createdAt = new Date().toISOString();
+            const transaction = {
+              id: randomUUID(),
+              memberId: member.id,
+              groupId: member.groupId,
+              loanId: null,
+              amount: Number(amount).toFixed(2),
+              transactionType: 'PENALTY_PAYMENT',
+              description: 'Penalty settled via M-Pesa',
+              createdBy: actor.id,
+              timestamp: createdAt,
+              createdAt,
+              updatedAt: createdAt
+            };
+            transaction.auditSignature = auditSignature(transaction);
+            
+            db.prepare(`
+              INSERT INTO "Transaction" (
+                id, memberId, groupId, loanId, amount, transactionType, description,
+                createdBy, timestamp, createdAt, updatedAt, auditSignature
+              ) VALUES (
+                @id, @memberId, @groupId, @loanId, @amount, @transactionType, @description,
+                @createdBy, @timestamp, @createdAt, @updatedAt, @auditSignature
+              )
+            `).run(transaction);
+            
+            console.log(`[M-PESA SUCCESS] Penalty ${penaltyId} settled for ${member.fullName}`);
+          }
+        } catch (error) {
+          console.error('[M-PESA ERROR] Failed to record transaction:', error.message);
         }
         
         // Delete pending request

@@ -206,5 +206,7 @@ module.exports = {
   recordContribution,
   recordRepayment,
   getAllTransactions,
-  getTransactionsForMember
+  getTransactionsForMember,
+  recordContributionInDatabase,
+  recordRepaymentInDatabase
 };

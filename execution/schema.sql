@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS "Member" (
     passwordHash TEXT NOT NULL,
     role TEXT NOT NULL,
     accountBalance TEXT NOT NULL,
+    status TEXT DEFAULT 'ACTIVE',
     deviceToken TEXT,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL,
@@ -96,11 +97,14 @@ CREATE TABLE IF NOT EXISTS "Penalty" (
     cycle TEXT,
     appliedAt TEXT NOT NULL,
     settled INTEGER NOT NULL DEFAULT 0,
+    status TEXT DEFAULT 'PENDING',
+    approvedBy TEXT,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL,
     auditSignature TEXT NOT NULL,
     FOREIGN KEY (memberId) REFERENCES "Member"(id) ON DELETE RESTRICT,
-    FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE
+    FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE,
+    FOREIGN KEY (approvedBy) REFERENCES "Member"(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS "pending_notifications" (

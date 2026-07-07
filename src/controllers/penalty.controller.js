@@ -24,9 +24,31 @@ async function sweepPenalties(req, res) {
   res.json({ success: true, data: result });
 }
 
+async function getPendingPenalties(req, res) {
+  const penalties = penaltyService.getPendingPenalties();
+  res.json({ success: true, data: penalties });
+}
+
+async function approvePenalty(req, res) {
+  const { id } = req.params;
+  const adminId = req.user.member.id;
+  const penalty = penaltyService.approvePenalty(id, adminId);
+  res.json({ success: true, data: penalty });
+}
+
+async function rejectPenalty(req, res) {
+  const { id } = req.params;
+  const adminId = req.user.member.id;
+  const penalty = penaltyService.rejectPenalty(id, adminId);
+  res.json({ success: true, data: penalty });
+}
+
 module.exports = {
   applyPenalty,
   settlePenalty,
   getMemberPenalties,
+  getPendingPenalties,
+  approvePenalty,
+  rejectPenalty,
   sweepPenalties
 };

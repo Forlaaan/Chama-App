@@ -161,6 +161,18 @@ function insertTransaction({ memberId, groupId, loanId, amount, transactionType,
 function requestLoan(body, authUser) {
   const actor = requireLinkedMember(authUser);
 
+  // Enforce minimum contribution of 2000
+  const contribRow = db.prepare(`
+    SELECT SUM(amount) as total
+    FROM "Transaction"
+    WHERE memberId = ? AND transactionType = 'CONTRIBUTION'
+  `).get(body.memberId);
+  const totalContrib = contribRow.total || 0;
+  
+  if (totalContrib < 2000) {
+    throw new AppError('A minimum total contribution of KSH 2,000 is required to request a loan.', 403);
+  }
+
   // Parse amounts via integer cents to avoid floating-point drift
   const principalCents  = toCents(body.principalAmount);
   const rateAsDecimal   = Number(body.interestRate);   // e.g. 0.10 = 10 %

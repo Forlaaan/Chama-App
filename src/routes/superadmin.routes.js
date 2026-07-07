@@ -13,5 +13,7 @@ router.get('/chamas', asyncHandler(superAdminController.getAllChamas));
 router.get('/members', asyncHandler(superAdminController.getAllMembers));
 router.patch('/chamas/:id/deactivate', asyncHandler(superAdminController.deactivateChama));
 router.post('/chamas/:id/impersonate', asyncHandler(superAdminController.impersonateGroup));
+router.patch('/members/:id/deactivate', asyncHandler(superAdminController.deactivateMember));
+router.patch('/members/:id/reactivate', asyncHandler(superAdminController.reactivateMember));
 
 module.exports = router;

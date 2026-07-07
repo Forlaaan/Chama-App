@@ -34,6 +34,10 @@ function getAllMembers() {
   return db.prepare('SELECT * FROM "Member" ORDER BY createdAt DESC').all().map(normalizeMember);
 }
 
+function getMembersByGroup(groupId) {
+  return db.prepare('SELECT * FROM "Member" WHERE groupId = ? ORDER BY createdAt DESC').all(groupId).map(normalizeMember);
+}
+
 function createMember(input) {
   // Enforce one ADMIN and one TREASURER per group (Blueprint §2 Role Constraints)
   if (input.role === 'ADMIN' || input.role === 'TREASURER') {
@@ -135,6 +139,7 @@ module.exports = {
   createMember,
   getMemberById,
   getAllMembers,
+  getMembersByGroup,
   updateMember,
   getMemberBalance,
   getContributionHistory,

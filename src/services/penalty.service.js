@@ -18,9 +18,11 @@ function applyPenalty(input) {
   // Verify member exists
   const member = memberService.getMemberById(input.memberId);
   
+  const status = input.status || 'PENDING';
+
   db.prepare(`
-    INSERT INTO "Penalty" (id, memberId, groupId, amount, reason, cycle, appliedAt, settled, createdAt, updatedAt, auditSignature)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    INSERT INTO "Penalty" (id, memberId, groupId, amount, reason, cycle, appliedAt, settled, status, createdAt, updatedAt, auditSignature)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
   `).run(
     penaltyId,
     input.memberId,
@@ -29,6 +31,7 @@ function applyPenalty(input) {
     input.reason,
     input.cycle || null,
     appliedAt,
+    status,
     appliedAt,
     appliedAt,
     'sig_penalty'
@@ -56,7 +59,27 @@ function getPenaltyById(id) {
 }
 
 function getPenaltiesByMember(memberId) {
-  return db.prepare('SELECT * FROM "Penalty" WHERE memberId = ? ORDER BY appliedAt DESC').all(memberId);
+  return db.prepare('SELECT * FROM "Penalty" WHERE memberId = ? AND status = "APPROVED" ORDER BY appliedAt DESC').all(memberId);
+}
+
+function getPendingPenalties() {
+  return db.prepare('SELECT * FROM "Penalty" WHERE status = "PENDING" ORDER BY appliedAt ASC').all();
+}
+
+function approvePenalty(id, adminId) {
+  const penalty = getPenaltyById(id);
+  if (penalty.status !== 'PENDING') throw new AppError('Penalty is not pending', 400);
+
+  db.prepare('UPDATE "Penalty" SET status = "APPROVED", approvedBy = ?, updatedAt = ? WHERE id = ?').run(adminId, now(), id);
+  return getPenaltyById(id);
+}
+
+function rejectPenalty(id, adminId) {
+  const penalty = getPenaltyById(id);
+  if (penalty.status !== 'PENDING') throw new AppError('Penalty is not pending', 400);
+
+  db.prepare('UPDATE "Penalty" SET status = "REJECTED", approvedBy = ?, updatedAt = ? WHERE id = ?').run(adminId, now(), id);
+  return getPenaltyById(id);
 }
 
 function settlePenalty(id) {
@@ -102,7 +125,8 @@ function sweepPenalties(groupId) {
           memberId: m.id,
           amount: penaltyAmount,
           reason: `Late contribution for cycle ${cycleName}`,
-          cycle: cycleName
+          cycle: cycleName,
+          status: 'APPROVED'
         });
         appliedCount++;
       }
@@ -116,6 +140,9 @@ module.exports = {
   applyPenalty,
   getPenaltyById,
   getPenaltiesByMember,
+  getPendingPenalties,
+  approvePenalty,
+  rejectPenalty,
   settlePenalty,
   sweepPenalties
 };

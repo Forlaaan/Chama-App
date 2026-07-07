@@ -18,6 +18,7 @@ router.get('/:id', validateRequest(memberIdSchema), asyncHandler(memberControlle
 router.patch('/:id', requireRole('ADMIN'), validateRequest(updateMemberSchema), asyncHandler(memberController.updateMember));
 router.get('/:id/balance', validateRequest(memberIdSchema), asyncHandler(memberController.getMemberBalance));
 router.get('/:id/contributions', validateRequest(memberIdSchema), asyncHandler(memberController.getContributionHistory));
+router.post('/:id/remove', requireRole('ADMIN'), asyncHandler(memberController.removeFromChama));
 
 module.exports = router;
 

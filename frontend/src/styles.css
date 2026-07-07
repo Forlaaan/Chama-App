@@ -69,7 +69,7 @@ button {
   font-weight: 800;
 }
 
-label { display: grid; gap: 8px; font-weight: 700; color: var(--ink); }
+label { display: grid; gap: 14px; font-weight: 700; color: var(--ink); }
 input, select, textarea {
   width: 100%;
   min-height: 46px;

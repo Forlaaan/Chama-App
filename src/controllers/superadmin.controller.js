@@ -15,7 +15,7 @@ async function getAllChamas(req, res) {
 
 async function getAllMembers(req, res) {
   const members = db.prepare(`
-    SELECT m.id, m.fullName, m.phoneNumber, m.role, m.accountBalance, g.name as groupName 
+    SELECT m.id, m.fullName, m.phoneNumber, m.role, m.accountBalance, m.status, g.name as groupName 
     FROM "Member" m
     LEFT JOIN "Group" g ON m.groupId = g.id
   `).all();
@@ -53,9 +53,36 @@ async function impersonateGroup(req, res) {
   res.json({ success: true, message: 'Now impersonating group: ' + group.name });
 }
 
+async function deactivateMember(req, res) {
+  const { id } = req.params;
+  const member = db.prepare('SELECT * FROM "Member" WHERE id = ?').get(id);
+  if (!member) throw new AppError('Member not found', 404);
+  if (member.role === 'SUPERADMIN') throw new AppError('Cannot deactivate a superadmin', 400);
+
+  db.prepare('UPDATE "Member" SET status = "DEACTIVATED", updatedAt = ? WHERE id = ?').run(
+    new Date().toISOString(), id
+  );
+
+  res.json({ success: true, message: 'Member deactivated successfully' });
+}
+
+async function reactivateMember(req, res) {
+  const { id } = req.params;
+  const member = db.prepare('SELECT * FROM "Member" WHERE id = ?').get(id);
+  if (!member) throw new AppError('Member not found', 404);
+
+  db.prepare('UPDATE "Member" SET status = "ACTIVE", updatedAt = ? WHERE id = ?').run(
+    new Date().toISOString(), id
+  );
+
+  res.json({ success: true, message: 'Member reactivated successfully' });
+}
+
 module.exports = {
   getAllChamas,
   getAllMembers,
   deactivateChama,
-  impersonateGroup
+  impersonateGroup,
+  deactivateMember,
+  reactivateMember
 };

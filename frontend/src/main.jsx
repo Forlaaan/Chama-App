@@ -10,10 +10,9 @@ import { Capacitor } from '@capacitor/core';
 // e.g. VITE_API_BASE_URL=http://192.168.100.33:4000
 let defaultApiUrl = 'http://localhost:4000';
 if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-  // Use the host PC's actual LAN IP rather than 10.0.2.2 so it works on both physical devices and emulators
-  defaultApiUrl = 'http://192.168.100.31:4000';
+  defaultApiUrl = 'http://192.168.100.33:4000';
 }
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || defaultApiUrl;
+const API_BASE_URL = 'http://192.168.100.33:4000';
 
 function money(value) {
   return 'KSH ' + Number(value || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 });
@@ -31,7 +30,9 @@ function getMemberName(members, id) {
 
 async function apiFetch(path, options) {
   const settings = options || {};
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 
+    'Content-Type': 'application/json'
+  };
   if (settings.token) headers.Authorization = 'Bearer ' + settings.token;
   
   // Build a cache key that includes the token so different users don't share cached data
@@ -73,6 +74,8 @@ function App() {
   const [transactions, setTransactions] = useState([]);
   const [loans, setLoans] = useState([]);
   const [pendingContributions, setPendingContributions] = useState([]);
+  const [penalties, setPenalties] = useState([]);
+  const [pendingPenalties, setPendingPenalties] = useState([]);
   const [language, setLanguage] = useState('en');
   const [currentMember, setCurrentMember] = useState(null);
   const [inviteCode, setInviteCode] = useState(null);
@@ -100,7 +103,8 @@ function App() {
     { id: 'requestLoan', label: 'Request Loan', roles: ['MEMBER', 'TREASURER', 'ADMIN'] },
     { id: 'treasurer', label: 'Treasurer', roles: ['TREASURER'] },
     { id: 'admin', label: 'Admin', roles: ['ADMIN'] },
-    { id: 'superadmin', label: 'Platform', roles: ['SUPERADMIN'] }
+    { id: 'superadmin', label: 'Platform', roles: ['SUPERADMIN'] },
+    { id: 'members', label: 'Members', roles: ['MEMBER', 'TREASURER', 'ADMIN', 'SUPERADMIN'] }
   ], []);
 
   function getHomeScreen(memberRole) {
@@ -161,6 +165,18 @@ function App() {
             setPendingContributions(Array.isArray(pcRes) ? pcRes : []);
           } catch (e) { }
         }
+
+        try {
+          const penRes = await apiFetch('/api/penalties/member/' + profile.member.id, { token: authToken });
+          setPenalties(Array.isArray(penRes) ? penRes : []);
+        } catch (e) { }
+
+        if (profile.member.role === 'ADMIN' || profile.member.role === 'SUPERADMIN') {
+          try {
+            const ppRes = await apiFetch('/api/penalties/pending', { token: authToken });
+            setPendingPenalties(Array.isArray(ppRes) ? ppRes : []);
+          } catch (e) { }
+        }
       }
     } catch (error) {
       setNotice(error.message);
@@ -201,9 +217,15 @@ function App() {
     return 'M-Pesa prompt sent to your phone. Please enter your PIN.';
   }
 
+  async function submitMpesaRepayment(form) {
+    const data = Object.fromEntries(new FormData(form));
+    await apiFetch('/api/mpesa/stkpush', { token, method: 'POST', body: { amount: data.amount, reference: 'REPAYMENT:' + data.loanId, description: 'Loan Repayment' } });
+    return 'M-Pesa prompt sent to your phone. Please enter your PIN.';
+  }
+
   async function requestLoanAction(form) {
     const data = Object.fromEntries(new FormData(form));
-    const body = { memberId: currentMember.id, groupId: currentMember.groupId, principalAmount: data.principalAmount, interestRate: data.interestRate, dueDate: data.dueDate, description: data.description };
+    const body = { memberId: currentMember.id, groupId: currentMember.groupId, principalAmount: data.principalAmount, interestRate: data.interestRate, dueDate: data.dueDate, description: data.description || 'Loan request' };
     await apiFetch('/api/loans/request', { token, method: 'POST', body });
     await refreshData();
     return 'Loan request submitted.';
@@ -252,6 +274,31 @@ function App() {
     }
   }
 
+  async function submitManualPenalty(form) {
+    const data = Object.fromEntries(new FormData(form));
+    await apiFetch('/api/penalties/apply', { token, method: 'POST', body: { memberId: data.memberId, amount: data.amount, reason: data.reason } });
+    await refreshData();
+    return 'Manual penalty requested. Awaiting admin approval.';
+  }
+
+  async function approvePenalty(id) {
+    await apiFetch('/api/penalties/' + id + '/approve', { token, method: 'PATCH' });
+    setNotice('Penalty approved.');
+    await refreshData();
+  }
+
+  async function rejectPenaltyAction(id) {
+    await apiFetch('/api/penalties/' + id + '/reject', { token, method: 'PATCH' });
+    setNotice('Penalty rejected.');
+    await refreshData();
+  }
+
+  async function submitMpesaPenaltyPayment(form) {
+    const data = Object.fromEntries(new FormData(form));
+    await apiFetch('/api/mpesa/stkpush', { token, method: 'POST', body: { amount: data.amount, reference: 'PENALTY:' + data.penaltyId, description: 'Penalty Payment' } });
+    return 'M-Pesa prompt sent to your phone. Please enter your PIN.';
+  }
+
   async function handleLogout() {
     try { await auth.signOut(); } catch (e) { /* ignore if mock login */ }
     localStorage.removeItem('chamaToken');
@@ -266,6 +313,8 @@ function App() {
     setTransactions([]);
     setLoans([]);
     setPendingContributions([]);
+    setPenalties([]);
+    setPendingPenalties([]);
     setInviteCode(null);
     setNotice('');
     setScreen('login');
@@ -278,12 +327,11 @@ function App() {
     return 'Repayment recorded.';
   }
 
-  async function addMember(form) {
-    const data = Object.fromEntries(new FormData(form));
-    const body = { groupId: currentMember?.groupId || 'group-001', fullName: data.fullName, phoneNumber: data.phoneNumber, email: data.email, role: data.role, accountBalance: data.accountBalance || '0.00' };
-    await apiFetch('/api/members', { token, method: 'POST', body });
+  async function removeMember(memberId) {
+    if (!window.confirm("Are you sure you want to remove this member from the Chama?")) return;
+    await apiFetch('/api/members/' + memberId + '/remove', { token, method: 'POST' });
+    setNotice('Member removed from Chama.');
     await refreshData();
-    return 'Member created.';
   }
 
   async function sendSms(form) {
@@ -317,11 +365,11 @@ function App() {
       <nav className="tabs">{navItems.filter((item) => item.roles.includes(role)).map((item) => <button key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}>{item.label}</button>)}</nav>
       {notice && <div className="notice">{notice}</div>}
       
-      {screen === 'member' && <MemberDashboard member={currentMember} transactions={memberTransactions} allTransactions={transactions} loans={memberLoans} members={members} go={setScreen} />}
+      {screen === 'member' && <MemberDashboard member={currentMember} transactions={memberTransactions} allTransactions={transactions} loans={memberLoans} members={members} penalties={penalties} go={setScreen} submitMpesaPenaltyPayment={submitMpesaPenaltyPayment} />}
       
       {screen === 'treasurer' && <TreasurerPanel members={members} pendingLoans={pendingLoans} pendingContributions={pendingContributions} approveLoan={treasurerApproveLoan} rejectLoan={rejectLoan} confirmContribution={confirmContribution} rejectContributionReq={rejectContributionReq} applyPenaltySweep={applyPenaltySweep} go={setScreen} />}
       
-      {screen === 'admin' && <AdminPanel members={members} treasurerApprovedLoans={treasurerApprovedLoans} approveLoan={adminApproveLoan} rejectLoan={rejectLoan} go={setScreen} inviteCode={inviteCode} />}
+      {screen === 'admin' && <AdminPanel members={members} treasurerApprovedLoans={treasurerApprovedLoans} pendingPenalties={pendingPenalties} approveLoan={adminApproveLoan} rejectLoan={rejectLoan} approvePenalty={approvePenalty} rejectPenalty={rejectPenaltyAction} go={setScreen} inviteCode={inviteCode} />}
       
       {screen === 'superadmin' && <SuperAdminDashboard token={token} apiFetch={apiFetch} />}
       
@@ -331,9 +379,13 @@ function App() {
 
       {screen === 'requestLoan' && <FormScreen title="Request Loan" onBack={() => setScreen('member')} onSubmit={requestLoanAction} successText="Loan request status will appear here"><label>Principal Amount (KSH)<input name="principalAmount" defaultValue="10000" /></label><label>Interest Rate<input name="interestRate" defaultValue="0.10" /></label><label>Due Date<input name="dueDate" type="date" defaultValue="2026-07-15" /></label><label>Description<input name="description" defaultValue="Emergency loan request" /></label></FormScreen>}
       
+      {screen === 'memberRepayment' && <FormScreen title="Repay Loan via M-Pesa" onBack={() => setScreen('member')} onSubmit={submitMpesaRepayment} successText="Check your phone for the M-Pesa prompt"><input type="hidden" name="loanId" value={loans.find(l => l.memberId === currentMember.id && ['ACTIVE','OVERDUE'].includes(l.status))?.id || ''} /><label>Amount (KSH)<input name="amount" defaultValue={loans.find(l => l.memberId === currentMember.id && ['ACTIVE','OVERDUE'].includes(l.status))?.totalRepayable || ''} /></label></FormScreen>}
+      
+      {screen === 'manualPenalty' && <FormScreen title="Apply Manual Penalty" onBack={() => setScreen('treasurer')} onSubmit={submitManualPenalty} successText="Check your admin panel"><MemberSelect members={members} /><label>Amount (KSH)<input name="amount" defaultValue="200" /></label><label>Reason<input name="reason" defaultValue="Missed meeting" /></label></FormScreen>}
+      
       {screen === 'repayment' && <RepaymentScreen loans={loans} members={members} onSubmit={recordRepayment} onBack={() => setScreen('treasurer')} />}
       
-      {screen === 'members' && <MembersScreen members={members} addMember={addMember} />}
+      {screen === 'members' && <MembersScreen members={members} removeMember={removeMember} />}
       
       {screen === 'reports' && <ReportsScreen token={token} apiFetch={apiFetch} members={members} transactions={transactions} loans={loans} />}
       
@@ -342,7 +394,7 @@ function App() {
   </main>;
 }
 
-function LoginScreen({ language, setLanguage, setToken, setScreen }) {
+function LoginScreen({ setToken, setScreen }) {
   const [phoneNumber, setPhoneNumber] = useState('+254');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -377,14 +429,13 @@ function LoginScreen({ language, setLanguage, setToken, setScreen }) {
   }
 
   return <div className="login-screen">
-    <div className="language-row"><button className={language === 'ENG' ? 'solid' : ''} onClick={() => setLanguage('ENG')}>ENG</button><button className={language === 'SWA' ? 'solid' : ''} onClick={() => setLanguage('SWA')}>SWA</button></div>
     <section className="brand-box"><div className="brand-mark">CH</div><p>CHAMA HUB</p></section>
     
     <form onSubmit={handleLogin}>
       <label>Phone Number<input value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+254 000 000 000" /></label>
-      
+      <br/>
       <label>6-Digit PIN<input type="password" inputMode="numeric" maxLength="6" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))} placeholder="123456" /></label>
-      
+      <br/>
       <button type="submit" className="primary bottom-action" disabled={loading || phoneNumber.trim().length < 9 || pin.length !== 6}>{loading ? 'Verifying...' : 'Secure Login'}</button>
       
       {error && <div style={{color: 'red', marginTop: 10}}>{error}</div>}
@@ -418,10 +469,15 @@ function TopBar({ screen, role, setScreen, currentMember, loading, onLogout }) {
   </header>;
 }
 
-function MemberDashboard({ member, transactions, allTransactions, loans, members, go }) {
+function MemberDashboard({ member, transactions, allTransactions, loans, members, penalties, go, submitMpesaPenaltyPayment }) {
   const activeLoan = loans.find((loan) => loan.memberId === member.id && ['ACTIVE', 'OVERDUE'].includes(loan.status));
   const totalContributions = transactions.filter((tx) => tx.transactionType === 'CONTRIBUTION').reduce((sum, tx) => sum + Number(tx.amount), 0);
+  const unsettledPenalties = penalties ? penalties.filter(p => p.settled === 0) : [];
+  
+  const firstName = member?.fullName?.split(' ')[0] || '';
+
   return <div className="screen-stack">
+    <h2 style={{ margin: '0 0 -10px 0', color: 'var(--primary)' }}>Welcome {firstName}</h2>
     <section className="wire-card">
       <p className="eyebrow">Personal Balance</p>
       <h1>{money(member.accountBalance)}</h1>
@@ -429,11 +485,35 @@ function MemberDashboard({ member, transactions, allTransactions, loans, members
       <p>Total Contributions: {money(totalContributions)}</p>
       <button style={{marginTop: 15}} className="primary" onClick={() => go('submitContribution')}>Make Contribution</button>
     </section>
+
+    {unsettledPenalties.length > 0 && (
+      <section className="wire-card" style={{borderColor: 'var(--danger)'}}>
+        <p className="eyebrow strong" style={{color: 'var(--danger)'}}>Unpaid Penalties</p>
+        {unsettledPenalties.map(p => (
+          <div className="queue-row" key={p.id}>
+            <div><strong>{p.reason}</strong><p>{p.cycle || 'No cycle'}</p></div>
+            <div className="right">
+              <p>{money(p.amount)}</p>
+              <form onSubmit={async (e) => { e.preventDefault(); const res = await submitMpesaPenaltyPayment(e.target); alert(res); }}>
+                <input type="hidden" name="amount" value={p.amount} />
+                <input type="hidden" name="penaltyId" value={p.id} />
+                <button type="submit" style={{marginTop: 5, background: 'var(--danger)', color: 'white'}}>Pay Penalty</button>
+              </form>
+            </div>
+          </div>
+        ))}
+      </section>
+    )}
+
     <section className="wire-card two-col">
       <div>
         <p className="eyebrow">Outstanding Loans</p>
         <strong>{activeLoan ? activeLoan.status : 'None'}</strong>
         <p>Due Date</p>
+        {activeLoan ? 
+          <button style={{marginTop: 15}} className="primary" onClick={() => go('memberRepayment')}>Repay Loan</button> :
+          <button style={{marginTop: 15}} className="primary" onClick={() => go('requestLoan')}>Request Loan</button>
+        }
       </div>
       <div className="right">
         <p>{activeLoan ? money(Number(activeLoan.totalRepayable) - Number(activeLoan.amountPaid)) : 'KSH 0'}</p>
@@ -452,7 +532,8 @@ function TreasurerPanel({ members, pendingLoans, pendingContributions, approveLo
     <div className="action-grid">
       <ActionTile icon="+" label="Record Contribution" onClick={() => go('recordContribution')} />
       <ActionTile icon="R" label="Record Repayment" onClick={() => go('repayment')} />
-      <ActionTile icon="!" label="Apply Penalty" onClick={applyPenaltySweep} />
+      <ActionTile icon="!" label="Apply Penalty" onClick={() => go('manualPenalty')} />
+      <ActionTile icon="*" label="Run Penalty Sweep" onClick={applyPenaltySweep} />
       <ActionTile icon="=" label="Reports" onClick={() => go('reports')} />
     </div>
 
@@ -482,7 +563,7 @@ function TreasurerPanel({ members, pendingLoans, pendingContributions, approveLo
   </div>;
 }
 
-function AdminPanel({ members, treasurerApprovedLoans, approveLoan, rejectLoan, go, inviteCode }) {
+function AdminPanel({ members, treasurerApprovedLoans, pendingPenalties, approveLoan, rejectLoan, approvePenalty, rejectPenalty, go, inviteCode }) {
   return <div className="screen-stack">
     {inviteCode && (
       <section className="wire-card" style={{ background: 'var(--primary)', color: 'white' }}>
@@ -494,6 +575,22 @@ function AdminPanel({ members, treasurerApprovedLoans, approveLoan, rejectLoan, 
         <p style={{ fontSize: '12px', margin: 0, opacity: 0.9 }}>Share this code with new members so they can join your Chama.</p>
       </section>
     )}
+
+    {pendingPenalties && pendingPenalties.length > 0 && (
+      <section className="wire-card">
+        <p className="eyebrow strong">Pending Penalties</p>
+        {pendingPenalties.map(p => (
+          <div className="queue-row" key={p.id}>
+            <div><strong>{getMemberName(members, p.memberId)}</strong><p>{p.reason} ({money(p.amount)})</p></div>
+            <div className="right">
+              <button onClick={() => approvePenalty(p.id)}>Approve</button>
+              <button style={{background: 'var(--danger)', color: 'white', marginTop: 4}} onClick={() => rejectPenalty(p.id)}>Reject</button>
+            </div>
+          </div>
+        ))}
+      </section>
+    )}
+
     <div className="action-grid">
       <ActionTile icon="U" label="Manage Members" onClick={() => go('members')} />
       <ActionTile icon="S" label="Test SMS" onClick={() => go('sms')} />
@@ -524,10 +621,10 @@ function MemberSelect({ members, currentMemberId }) {
   return <label>Select Member<select name="memberId" defaultValue={currentMemberId || members[1]?.id || members[0]?.id}>{members.map((member) => <option key={member.id} value={member.id}>{member.fullName}</option>)}</select></label>;
 }
 
-function FormScreen({ title, onBack, onSubmit, successText, children }) {
+function FormScreen({ onSubmit, successText, children }) {
   const [message, setMessage] = useState(successText);
   const [busy, setBusy] = useState(false);
-  return <form className="form-screen" onSubmit={async (event) => { event.preventDefault(); setBusy(true); try { setMessage(await onSubmit(event.currentTarget)); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }}><div className="form-title"><button type="button" className="icon-button" onClick={onBack}>{'<-'}</button><strong>{title}</strong></div>{children}<button className="primary" disabled={busy}>{busy ? 'Working...' : title}</button><div className="confirmation">{message}</div></form>;
+  return <form className="form-screen" onSubmit={async (event) => { event.preventDefault(); setBusy(true); try { setMessage(await onSubmit(event.currentTarget)); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }}>{children}<button className="primary" disabled={busy}>{busy ? 'Working...' : 'Submit'}</button><div className="confirmation">{message}</div></form>;
 }
 
 function RepaymentScreen({ loans, members, onSubmit, onBack }) {
@@ -535,8 +632,30 @@ function RepaymentScreen({ loans, members, onSubmit, onBack }) {
   return <FormScreen title="Record Repayment" onBack={onBack} onSubmit={onSubmit} successText="Repayment confirmation will appear here"><label>Select Loan<select name="loanId">{activeLoans.map((loan) => <option key={loan.id} value={loan.id}>{getMemberName(members, loan.memberId)} - {money(loan.totalRepayable)}</option>)}</select></label><label>Repayment Amount (KSH)<input name="amount" defaultValue="1000" /></label><label>Description<input name="description" defaultValue="Loan repayment" /></label></FormScreen>;
 }
 
-function MembersScreen({ members, addMember }) {
-  return <div className="screen-stack"><section className="wire-card"><p className="eyebrow strong">Member Directory</p>{members.map((member) => <div className="queue-row" key={member.id}><div><strong>{member.fullName}</strong><p>{member.phoneNumber}</p></div><div className="right"><p>{member.role}</p><p>{money(member.accountBalance)}</p></div></div>)}</section><FormPanel submitText="Create Member" onSubmit={addMember}><label>Full Name<input name="fullName" defaultValue="David Kamau" /></label><label>Phone Number<input name="phoneNumber" defaultValue="+254700000005" /></label><label>Email<input name="email" defaultValue="david@example.com" /></label><label>Role<select name="role" defaultValue="MEMBER"><option>MEMBER</option><option>TREASURER</option><option>ADMIN</option></select></label><label>Opening Balance<input name="accountBalance" defaultValue="0.00" /></label></FormPanel></div>;
+function MembersScreen({ members, removeMember }) {
+  const activeMembers = members.filter(m => m.status !== 'DEACTIVATED' && m.groupId !== null);
+  
+  return <div className="screen-stack">
+    <section className="wire-card">
+      <p className="eyebrow strong">Member Directory</p>
+      {activeMembers.map((member) => (
+        <div className="queue-row" key={member.id}>
+          <div>
+            <strong>{member.fullName}</strong>
+            <p>{member.phoneNumber}</p>
+          </div>
+          <div className="right">
+            <p>{member.role}</p>
+            {member.role !== 'ADMIN' && (
+              <button style={{background: 'var(--danger)', color: 'white', marginTop: 4}} onClick={() => removeMember(member.id)}>
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+    </section>
+  </div>;
 }
 
 function ReportsScreen({ token, apiFetch, members, transactions, loans }) {
@@ -659,25 +778,50 @@ function SuperAdminDashboard({ token, apiFetch }) {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState('chamas');
+
+  async function load() {
+    try {
+      const c = await apiFetch('/api/superadmin/chamas', { token });
+      const m = await apiFetch('/api/superadmin/members', { token });
+      setChamas(c || []);
+      setMembers(m || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function load() {
-      try {
-        const c = await apiFetch('/api/superadmin/chamas', { token });
-        const m = await apiFetch('/api/superadmin/members', { token });
-        setChamas(c || []);
-        setMembers(m || []);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    }
     load();
   }, [token]);
 
+  async function handleDeactivate(id) {
+    if (!window.confirm('Are you sure you want to deactivate this member?')) return;
+    try {
+      await apiFetch(`/api/superadmin/members/${id}/deactivate`, { token, method: 'PATCH' });
+      await load();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  async function handleReactivate(id) {
+    if (!window.confirm('Are you sure you want to reactivate this member?')) return;
+    try {
+      await apiFetch(`/api/superadmin/members/${id}/reactivate`, { token, method: 'PATCH' });
+      await load();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
   if (loading) return <div className="shell">Loading platform data...</div>;
   if (error) return <div className="notice">{error}</div>;
+
+  const activeMembers = members.filter(m => m.status !== 'DEACTIVATED');
+  const deactivatedMembers = members.filter(m => m.status === 'DEACTIVATED');
 
   return <div className="screen-stack">
     <section className="wire-card">
@@ -687,19 +831,57 @@ function SuperAdminDashboard({ token, apiFetch }) {
         <div><strong>Total Members</strong><p>{members.length}</p></div>
       </div>
     </section>
+
+    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', padding: '10px 0' }}>
+      <button className={activeTab === 'chamas' ? 'primary' : ''} onClick={() => setActiveTab('chamas')}>All Chamas</button>
+      <button className={activeTab === 'active_members' ? 'primary' : ''} onClick={() => setActiveTab('active_members')}>Active Members</button>
+      <button className={activeTab === 'deactivated_members' ? 'primary' : ''} onClick={() => setActiveTab('deactivated_members')}>Deactivated</button>
+    </div>
     
-    <section className="wire-card">
-      <p className="eyebrow strong">All Chamas</p>
-      {chamas.map(g => (
-        <div className="queue-row" key={g.id}>
-          <div><strong>{g.name}</strong><p>{g.memberCount} members</p></div>
-          <div className="right">
-            <p>{money(g.totalContributions)}</p>
-            <p style={{ fontSize: 10 }}>{g.id}</p>
+    {activeTab === 'chamas' && (
+      <section className="wire-card">
+        <p className="eyebrow strong">All Chamas</p>
+        {chamas.map(g => (
+          <div className="queue-row" key={g.id}>
+            <div><strong>{g.name}</strong><p>{g.memberCount} members</p></div>
+            <div className="right">
+              <p>{money(g.totalContributions)}</p>
+              <p style={{ fontSize: 10 }}>{g.id}</p>
+            </div>
           </div>
-        </div>
-      ))}
-    </section>
+        ))}
+      </section>
+    )}
+
+    {activeTab === 'active_members' && (
+      <section className="wire-card">
+        <p className="eyebrow strong">Active Members</p>
+        {activeMembers.length === 0 && <p>No active members.</p>}
+        {activeMembers.map(m => (
+          <div className="queue-row" key={m.id}>
+            <div><strong>{m.fullName}</strong><p>{m.phoneNumber} ({m.groupName || 'No group'})</p></div>
+            <div className="right">
+              <button style={{background: 'var(--danger)', color: 'white'}} onClick={() => handleDeactivate(m.id)}>Deactivate</button>
+            </div>
+          </div>
+        ))}
+      </section>
+    )}
+
+    {activeTab === 'deactivated_members' && (
+      <section className="wire-card">
+        <p className="eyebrow strong">Deactivated Members</p>
+        {deactivatedMembers.length === 0 && <p>No deactivated members.</p>}
+        {deactivatedMembers.map(m => (
+          <div className="queue-row" key={m.id}>
+            <div><strong>{m.fullName}</strong><p>{m.phoneNumber} ({m.groupName || 'No group'})</p></div>
+            <div className="right">
+              <button onClick={() => handleReactivate(m.id)}>Reactivate</button>
+            </div>
+          </div>
+        ))}
+      </section>
+    )}
   </div>;
 }
 
