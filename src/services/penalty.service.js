@@ -3,6 +3,7 @@ const { db } = require('../config/database');
 const { AppError } = require('../utils/errors');
 const notificationService = require('./notification.service');
 const memberService = require('./member.service');
+const { auditSignature } = require('../utils/audit');
 
 function now() {
   return new Date().toISOString();
@@ -20,22 +21,26 @@ function applyPenalty(input) {
   
   const status = input.status || 'PENDING';
 
+  const penalty = {
+    id: penaltyId,
+    memberId: input.memberId,
+    groupId: member.groupId,
+    amount: input.amount,
+    reason: input.reason,
+    cycle: input.cycle || null,
+    appliedAt,
+    settled: 0,
+    status,
+    createdAt: appliedAt,
+    updatedAt: appliedAt
+  };
+  
+  penalty.auditSignature = auditSignature(penalty);
+
   db.prepare(`
     INSERT INTO "Penalty" (id, memberId, groupId, amount, reason, cycle, appliedAt, settled, status, createdAt, updatedAt, auditSignature)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-  `).run(
-    penaltyId,
-    input.memberId,
-    member.groupId,
-    input.amount,
-    input.reason,
-    input.cycle || null,
-    appliedAt,
-    status,
-    appliedAt,
-    appliedAt,
-    'sig_penalty'
-  );
+    VALUES (@id, @memberId, @groupId, @amount, @reason, @cycle, @appliedAt, @settled, @status, @createdAt, @updatedAt, @auditSignature)
+  `).run(penalty);
 
   // Send SMS Notification
   try {
@@ -70,7 +75,11 @@ function approvePenalty(id, adminId) {
   const penalty = getPenaltyById(id);
   if (penalty.status !== 'PENDING') throw new AppError('Penalty is not pending', 400);
 
-  db.prepare('UPDATE "Penalty" SET status = "APPROVED", approvedBy = ?, updatedAt = ? WHERE id = ?').run(adminId, now(), id);
+  const updatedAt = now();
+  const updatedPenalty = { ...penalty, status: 'APPROVED', approvedBy: adminId, updatedAt };
+  updatedPenalty.auditSignature = auditSignature(updatedPenalty);
+
+  db.prepare('UPDATE "Penalty" SET status = "APPROVED", approvedBy = ?, updatedAt = ?, auditSignature = ? WHERE id = ?').run(adminId, updatedAt, updatedPenalty.auditSignature, id);
   return getPenaltyById(id);
 }
 
@@ -78,7 +87,11 @@ function rejectPenalty(id, adminId) {
   const penalty = getPenaltyById(id);
   if (penalty.status !== 'PENDING') throw new AppError('Penalty is not pending', 400);
 
-  db.prepare('UPDATE "Penalty" SET status = "REJECTED", approvedBy = ?, updatedAt = ? WHERE id = ?').run(adminId, now(), id);
+  const updatedAt = now();
+  const updatedPenalty = { ...penalty, status: 'REJECTED', approvedBy: adminId, updatedAt };
+  updatedPenalty.auditSignature = auditSignature(updatedPenalty);
+
+  db.prepare('UPDATE "Penalty" SET status = "REJECTED", approvedBy = ?, updatedAt = ?, auditSignature = ? WHERE id = ?').run(adminId, updatedAt, updatedPenalty.auditSignature, id);
   return getPenaltyById(id);
 }
 
@@ -86,7 +99,11 @@ function settlePenalty(id) {
   const penalty = getPenaltyById(id);
   if (penalty.settled === 1) throw new AppError('Penalty is already settled', 400);
 
-  db.prepare('UPDATE "Penalty" SET settled = 1, updatedAt = ? WHERE id = ?').run(now(), id);
+  const updatedAt = now();
+  const updatedPenalty = { ...penalty, settled: 1, updatedAt };
+  updatedPenalty.auditSignature = auditSignature(updatedPenalty);
+
+  db.prepare('UPDATE "Penalty" SET settled = 1, updatedAt = ?, auditSignature = ? WHERE id = ?').run(updatedAt, updatedPenalty.auditSignature, id);
   return getPenaltyById(id);
 }
 

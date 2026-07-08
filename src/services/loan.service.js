@@ -386,7 +386,7 @@ async function adminApproveLoan(params, authUser) {
  * @param {object} body     Optional { reason }
  * @param {object} authUser req.user
  */
-function rejectLoan(params, body, authUser) {
+async function rejectLoan(params, body, authUser) {
   const actor = requireLinkedMember(authUser);
   requireActorRole(actor, 'TREASURER', 'ADMIN');
 
@@ -411,6 +411,7 @@ function rejectLoan(params, body, authUser) {
     );
   }
 
+  const member = memberService.getMemberById(loanRow.memberId);
   const updatedAt = now();
   const updatedLoan = {
     ...loanRow,
@@ -428,6 +429,21 @@ function rejectLoan(params, body, authUser) {
   });
 
   const reason = body?.reason || 'No reason provided';
+  const smsMessage =
+    `Dear ${member.fullName}, your loan application of KES ${loanRow.principalAmount} ` +
+    `has been rejected. Reason: ${reason}.`;
+
+  try {
+    await notificationService.sendOrQueueSms({
+      memberId: member.id,
+      phoneNumber: member.phoneNumber,
+      type: 'LOAN_REJECTED',
+      message: smsMessage,
+      actorId: actor.id,
+    });
+  } catch (err) {
+    console.error('Failed to send rejection SMS:', err.message);
+  }
 
   return {
     loan: normalizeLoan(updatedLoan),
@@ -613,60 +629,6 @@ function getLoanById(params, authUser) {
   const row = getLoanRowById(params.id);
   if (!row) throw new AppError(`Loan not found: ${params.id}`, 404);
   return normalizeLoan(row);
-}
-
-// ─── BR-005: Loan Rejection ───────────────────────────────────────────────────
-
-async function rejectLoan(params, body, authUser) {
-  const actor = requireLinkedMember(authUser);
-  requireActorRole(actor, ['TREASURER', 'ADMIN']);
-
-  const loanRow = getLoanRowById(params.id);
-  if (!loanRow) throw new AppError(`Loan not found: ${params.id}`, 404);
-
-  if (loanRow.status !== 'PENDING' && loanRow.status !== 'TREASURER_APPROVED') {
-    throw new AppError(`Cannot reject a loan with status: ${loanRow.status}`, 409);
-  }
-
-  const member = memberService.getMemberById(loanRow.memberId);
-  const updatedAt = now();
-
-  const updatedLoan = {
-    ...loanRow,
-    status: 'REJECTED',
-    approvedBy: actor.id,
-    updatedAt,
-  };
-  updatedLoan.auditSignature = auditSignature(updatedLoan);
-
-  updateLoanStatus(loanRow.id, {
-    status: 'REJECTED',
-    approvedBy: actor.id,
-    amountPaid: loanRow.amountPaid,
-    updatedAt,
-    auditSig: updatedLoan.auditSignature,
-  });
-
-  const smsMessage =
-    `Dear ${member.fullName}, your loan application of KES ${loanRow.principalAmount} ` +
-    `has been rejected. Reason: ${body.reason || 'Not specified'}.`;
-
-  try {
-    await notificationService.sendOrQueueSms({
-      memberId: member.id,
-      phoneNumber: member.phoneNumber,
-      type: 'LOAN_REJECTED',
-      message: smsMessage,
-      actorId: actor.id,
-    });
-  } catch (err) {
-    console.error('Failed to send rejection SMS:', err.message);
-  }
-
-  return {
-    loan: normalizeLoan(updatedLoan),
-    message: 'Loan rejected successfully.',
-  };
 }
 
 // ─── GET loans for a member ───────────────────────────────────────────────────

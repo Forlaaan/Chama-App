@@ -1,17 +1,78 @@
 const { db } = require('../config/database');
 const { AppError } = require('../utils/errors');
 
-async function getGroupSummary(req, res) {
+const { auditSignature } = require('../utils/audit');
+
+async function getDashboardData(req, res) {
   const groupId = req.user.member.groupId;
+
+  // 1. Financial Health
+  const totalMemberSavings = db.prepare(`SELECT COALESCE(SUM(accountBalance), 0) as total FROM "Member" WHERE groupId = ? AND status != 'DEACTIVATED'`).get(groupId).total;
+  const activeMembersCount = db.prepare(`SELECT COUNT(*) as count FROM "Member" WHERE groupId = ? AND status != 'DEACTIVATED'`).get(groupId).count;
   
-  const summary = db.prepare(`
-    SELECT 
-      (SELECT COALESCE(SUM(amount), 0) FROM "Transaction" WHERE groupId = ? AND transactionType = 'CONTRIBUTION') as totalCollected,
-      (SELECT COALESCE(SUM(principalAmount), 0) FROM "Loan" WHERE groupId = ? AND status IN ('ACTIVE', 'OVERDUE')) as totalOutstandingLoans,
-      (SELECT COALESCE(SUM(amountPaid), 0) FROM "Loan" WHERE groupId = ?) as totalLoanRepayments
-  `).get(groupId, groupId, groupId);
+  // 2. Loan Health
+  const outstandingLoanValue = db.prepare(`SELECT COALESCE(SUM(totalRepayable - amountPaid), 0) as total FROM "Loan" WHERE groupId = ? AND status IN ('ACTIVE', 'OVERDUE')`).get(groupId).total;
+  const activeLoansCount = db.prepare(`SELECT COUNT(*) as count FROM "Loan" WHERE groupId = ? AND status = 'ACTIVE'`).get(groupId).count;
+  const overdueLoansCount = db.prepare(`SELECT COUNT(*) as count FROM "Loan" WHERE groupId = ? AND status = 'OVERDUE'`).get(groupId).count;
   
-  res.json({ success: true, data: summary });
+  // 3. Contribution Compliance
+  const membersContributedThisCycle = db.prepare(`
+    SELECT COUNT(DISTINCT memberId) as count
+    FROM "Transaction" 
+    WHERE groupId = ? AND transactionType = 'CONTRIBUTION' 
+    AND strftime('%Y-%m', timestamp) = strftime('%Y-%m', 'now')
+  `).get(groupId).count;
+
+  // 4. Transparency
+  const totalTransactions = db.prepare(`SELECT COUNT(*) as count FROM "Transaction" WHERE groupId = ?`).get(groupId).count;
+  const lastSyncRow = db.prepare(`SELECT MAX(updatedAt) as lastSync FROM "Transaction" WHERE groupId = ?`).get(groupId);
+  const lastSync = lastSyncRow && lastSyncRow.lastSync ? lastSyncRow.lastSync : new Date().toISOString();
+
+  // 5. Audit Integrity
+  const allTx = db.prepare(`SELECT * FROM "Transaction" WHERE groupId = ? ORDER BY timestamp DESC LIMIT 50`).all(groupId);
+  let validSignatures = 0;
+  for (const tx of allTx) {
+    if (tx.auditSignature === auditSignature(tx)) validSignatures++;
+  }
+  const auditIntegrity = allTx.length > 0 ? (validSignatures === allTx.length) : true;
+
+  // 6. Recent Activity
+  const recentTransactions = db.prepare(`
+    SELECT t.*, m.fullName as memberName 
+    FROM "Transaction" t
+    LEFT JOIN "Member" m ON t.memberId = m.id
+    WHERE t.groupId = ? 
+    ORDER BY t.timestamp DESC 
+    LIMIT 5
+  `).all(groupId);
+
+  res.json({
+    success: true,
+    data: {
+      financialHealth: {
+        totalMemberSavings,
+        activeMembersCount
+      },
+      loanHealth: {
+        outstandingLoanValue,
+        activeLoansCount,
+        overdueLoansCount
+      },
+      compliance: {
+        membersContributedThisCycle,
+        totalActiveMembers: activeMembersCount
+      },
+      transparency: {
+        totalTransactions,
+        lastSync
+      },
+      audit: {
+        isVerified: auditIntegrity,
+        transactionsChecked: allTx.length
+      },
+      recentTransactions
+    }
+  });
 }
 
 async function getContributionMatrix(req, res) {
@@ -36,28 +97,6 @@ async function getContributionMatrix(req, res) {
   res.json({ success: true, data: matrix });
 }
 
-async function getLoanBook(req, res) {
-  const groupId = req.user.member.groupId;
-  
-  const loans = db.prepare(`
-    SELECT l.*, m.fullName as memberName 
-    FROM "Loan" l
-    JOIN "Member" m ON l.memberId = m.id
-    WHERE l.groupId = ?
-    ORDER BY l.createdAt DESC
-  `).all(groupId);
-  
-  const summary = {
-    active: loans.filter(l => l.status === 'ACTIVE').length,
-    overdue: loans.filter(l => l.status === 'OVERDUE').length,
-    paid: loans.filter(l => l.status === 'PAID').length,
-    pending: loans.filter(l => l.status === 'PENDING' || l.status === 'TREASURER_APPROVED').length,
-    loans: loans
-  };
-  
-  res.json({ success: true, data: summary });
-}
-
 async function getMemberStatement(req, res) {
   const memberId = req.params.memberId || req.user.member.id;
   const groupId = req.user.member.groupId;
@@ -78,8 +117,7 @@ async function getMemberStatement(req, res) {
 }
 
 module.exports = {
-  getGroupSummary,
+  getDashboardData,
   getContributionMatrix,
-  getLoanBook,
   getMemberStatement
 };

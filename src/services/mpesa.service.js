@@ -47,8 +47,8 @@ async function simulateMpesaCallback(checkoutRequestID, amount, phoneNumber) {
     // In reality, the callback URL would be hit by Safaricom.
     // For this mock, we will just assume the frontend polls or the user manually confirms, 
     // OR we trigger a local API call.
-    // Let's use `fetch` to call our own endpoint (if we know the port, default 3000)
-    fetch('http://localhost:3000/api/mpesa/callback', {
+    // Let's use `fetch` to call our own endpoint
+    fetch('http://192.168.100.33:4000/api/mpesa/callback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

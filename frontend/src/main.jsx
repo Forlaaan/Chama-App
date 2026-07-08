@@ -375,9 +375,9 @@ function App() {
       
       {screen === 'recordContribution' && <FormScreen title="Record Contribution" onBack={() => setScreen('treasurer')} onSubmit={recordContribution} successText="Confirmation message will appear here"><MemberSelect members={members} /><label>Contribution Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="5000" /></label><label>Date<input name="date" defaultValue={new Date().toISOString().slice(0, 10)} /></label><label>Description<input name="description" defaultValue="Monthly contribution" /></label></FormScreen>}
       
-      {screen === 'submitContribution' && <FormScreen title="Contribute" onBack={() => setScreen('member')} onSubmit={submitContributionRequestAction} submitText="Request Approval" successText="Your request is pending treasurer approval."><label>Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="2000" /></label><label>Cycle (Optional)<input name="cycle" defaultValue="July 2026" /></label><div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}><button type="button" onClick={(e) => { e.preventDefault(); submitMpesaContribution(e.target.form).then(setNotice).catch(err => setNotice(err.message)); }} style={{ background: '#4CAF50', color: 'white' }}>Pay instantly via M-Pesa</button></div></FormScreen>}
+      {screen === 'submitContribution' && <FormScreen title="Contribute" onBack={() => setScreen('member')} onSubmit={submitContributionRequestAction} submitText="Request Approval" successText="Your request is pending treasurer approval."><label>Amount (KSH)<input name="amount" inputMode="decimal" defaultValue="2000" /></label><label>Current Contribution Cycle<input name="cycle" defaultValue="July 2026" /></label></FormScreen>}
 
-      {screen === 'requestLoan' && <FormScreen title="Request Loan" onBack={() => setScreen('member')} onSubmit={requestLoanAction} successText="Loan request status will appear here"><label>Principal Amount (KSH)<input name="principalAmount" defaultValue="10000" /></label><label>Interest Rate<input name="interestRate" defaultValue="0.10" /></label><label>Due Date<input name="dueDate" type="date" defaultValue="2026-07-15" /></label><label>Description<input name="description" defaultValue="Emergency loan request" /></label></FormScreen>}
+      {screen === 'requestLoan' && <FormScreen title="Request Loan" onBack={() => setScreen('member')} onSubmit={requestLoanAction} successText="Loan request status will appear here"><label>Principal Amount (KSH)<input name="principalAmount" defaultValue="10000" /></label><p style={{marginBottom: 15, fontSize: 14, color: 'var(--text-color)'}}><strong>Current Interest Rate:</strong> 10%</p><input type="hidden" name="interestRate" value="0.10" /><label>Due Date<input name="dueDate" type="date" defaultValue="2026-07-15" /></label><label>Description<input name="description" defaultValue="Emergency loan request" /></label></FormScreen>}
       
       {screen === 'memberRepayment' && <FormScreen title="Repay Loan via M-Pesa" onBack={() => setScreen('member')} onSubmit={submitMpesaRepayment} successText="Check your phone for the M-Pesa prompt"><input type="hidden" name="loanId" value={loans.find(l => l.memberId === currentMember.id && ['ACTIVE','OVERDUE'].includes(l.status))?.id || ''} /><label>Amount (KSH)<input name="amount" defaultValue={loans.find(l => l.memberId === currentMember.id && ['ACTIVE','OVERDUE'].includes(l.status))?.totalRepayable || ''} /></label></FormScreen>}
       
@@ -385,7 +385,7 @@ function App() {
       
       {screen === 'repayment' && <RepaymentScreen loans={loans} members={members} onSubmit={recordRepayment} onBack={() => setScreen('treasurer')} />}
       
-      {screen === 'members' && <MembersScreen members={members} removeMember={removeMember} />}
+      {screen === 'members' && <MembersScreen role={role} members={members} removeMember={removeMember} />}
       
       {screen === 'reports' && <ReportsScreen token={token} apiFetch={apiFetch} members={members} transactions={transactions} loans={loans} />}
       
@@ -632,7 +632,7 @@ function RepaymentScreen({ loans, members, onSubmit, onBack }) {
   return <FormScreen title="Record Repayment" onBack={onBack} onSubmit={onSubmit} successText="Repayment confirmation will appear here"><label>Select Loan<select name="loanId">{activeLoans.map((loan) => <option key={loan.id} value={loan.id}>{getMemberName(members, loan.memberId)} - {money(loan.totalRepayable)}</option>)}</select></label><label>Repayment Amount (KSH)<input name="amount" defaultValue="1000" /></label><label>Description<input name="description" defaultValue="Loan repayment" /></label></FormScreen>;
 }
 
-function MembersScreen({ members, removeMember }) {
+function MembersScreen({ role, members, removeMember }) {
   const activeMembers = members.filter(m => m.status !== 'DEACTIVATED' && m.groupId !== null);
   
   return <div className="screen-stack">
@@ -646,7 +646,7 @@ function MembersScreen({ members, removeMember }) {
           </div>
           <div className="right">
             <p>{member.role}</p>
-            {member.role !== 'ADMIN' && (
+            {(role === 'ADMIN' || role === 'SUPERADMIN') && member.role !== 'SUPERADMIN' && (
               <button style={{background: 'var(--danger)', color: 'white', marginTop: 4}} onClick={() => removeMember(member.id)}>
                 Remove
               </button>
@@ -658,109 +658,123 @@ function MembersScreen({ members, removeMember }) {
   </div>;
 }
 
-function ReportsScreen({ token, apiFetch, members, transactions, loans }) {
-  const [activeTab, setActiveTab] = useState('summary');
-  const [summary, setSummary] = useState(null);
-  const [matrix, setMatrix] = useState([]);
-  const [loanBook, setLoanBook] = useState(null);
+function ReportsScreen({ token, apiFetch }) {
+  const [dashboard, setDashboard] = useState(null);
 
   useEffect(() => {
-    async function fetchReports() {
+    async function fetchDashboard() {
       try {
-        if (activeTab === 'summary' && !summary) {
-          const s = await apiFetch('/api/reports/summary', { token });
-          setSummary(s);
-        } else if (activeTab === 'contributions' && matrix.length === 0) {
-          const m = await apiFetch('/api/reports/matrix', { token });
-          setMatrix(m);
-        } else if (activeTab === 'loans' && !loanBook) {
-          const l = await apiFetch('/api/reports/loanbook', { token });
-          setLoanBook(l);
-        }
+        const d = await apiFetch('/api/reports/dashboard', { token });
+        setDashboard(d);
       } catch (err) {
-        console.error('Failed to fetch reports', err);
+        console.error('Failed to fetch dashboard', err);
       }
     }
-    fetchReports();
-  }, [activeTab, token, summary, matrix.length, loanBook, apiFetch]);
+    fetchDashboard();
+  }, [token, apiFetch]);
 
-  return <div className="screen-stack">
-    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', padding: '10px 0' }}>
-      <button className={activeTab === 'summary' ? 'primary' : ''} onClick={() => setActiveTab('summary')}>Summary</button>
-      <button className={activeTab === 'contributions' ? 'primary' : ''} onClick={() => setActiveTab('contributions')}>Contributions</button>
-      <button className={activeTab === 'loans' ? 'primary' : ''} onClick={() => setActiveTab('loans')}>Loan Book</button>
-      <button className={activeTab === 'ledger' ? 'primary' : ''} onClick={() => setActiveTab('ledger')}>Ledger</button>
-    </div>
+  if (!dashboard) return <div className="screen-stack"><p style={{padding: 20}}>Loading Financial Overview...</p></div>;
 
-    {activeTab === 'summary' && summary && (
-      <div className="screen-stack">
-        <section className="wire-card">
-          <p className="eyebrow strong">Group Financial Health</p>
-          <h2>{money(summary.totalCollected)}</h2>
-          <p>Total Contributions</p>
-          <hr style={{ margin: '10px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.1)' }} />
-          <h2>{money(summary.totalOutstandingLoans)}</h2>
-          <p>Active & Overdue Loans</p>
-          <hr style={{ margin: '10px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.1)' }} />
-          <h2>{money(summary.totalLoanRepayments)}</h2>
-          <p>Total Repayments</p>
-        </section>
+  const { financialHealth, loanHealth, compliance, transparency, audit, recentTransactions } = dashboard;
+  const complianceRate = compliance.totalActiveMembers > 0 ? Math.round((compliance.membersContributedThisCycle / compliance.totalActiveMembers) * 100) : 0;
+
+  return <div className="screen-stack" style={{ paddingBottom: 20 }}>
+    <h2 style={{ padding: '0 15px', marginTop: 10, fontSize: 24, fontWeight: '700' }}>Financial Overview</h2>
+    
+    <section className="wire-card">
+      <p className="eyebrow strong">1. Financial Health</p>
+      <h2>{money(financialHealth.totalMemberSavings)}</h2>
+      <p>Total Member Savings</p>
+      <hr style={{ margin: '10px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.1)' }} />
+      <div>
+        <h2>{financialHealth.activeMembersCount}</h2>
+        <p>Active Members</p>
       </div>
-    )}
+    </section>
 
-    {activeTab === 'contributions' && matrix.length > 0 && (
-      <div className="screen-stack">
-        <section className="wire-card">
-          <p className="eyebrow strong">Member Contributions</p>
-          {matrix.map(m => (
-            <div className="queue-row" key={m.memberId}>
-              <div><strong>{m.fullName}</strong><p>Balance: {money(m.balance)}</p></div>
-              <div className="right">
-                <strong>{money(m.totalContributions)}</strong>
-                <p style={{ fontSize: 10 }}>lifetime</p>
+    <section className="wire-card">
+      <p className="eyebrow strong">2. Contribution Compliance</p>
+      <div style={{ marginBottom: 15 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+          <span>Current Contribution Cycle</span>
+          <strong>{complianceRate}%</strong>
+        </div>
+        <div style={{ width: '100%', background: 'rgba(255,255,255,0.1)', height: 8, borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ width: `${complianceRate}%`, background: 'var(--primary)', height: '100%' }}></div>
+        </div>
+      </div>
+      <p style={{ fontSize: 12 }}>{compliance.membersContributedThisCycle} of {compliance.totalActiveMembers} members paid this cycle.</p>
+    </section>
+
+    <section className="wire-card">
+      <p className="eyebrow strong">3. Loan Health</p>
+      <div style={{ display: 'flex', gap: 10, flexDirection: 'column' }}>
+        <div className="queue-row" style={{ padding: 0, border: 'none' }}>
+          <div><strong>Outstanding Loan Value</strong></div>
+          <div className="right"><strong>{money(loanHealth.outstandingLoanValue)}</strong></div>
+        </div>
+        <div className="queue-row" style={{ padding: 0, border: 'none' }}>
+          <div><strong>Loans in Good Standing</strong></div>
+          <div className="right"><strong>{loanHealth.activeLoansCount}</strong></div>
+        </div>
+        <div className="queue-row" style={{ padding: 0, border: 'none' }}>
+          <div><strong>Overdue Loans</strong></div>
+          <div className="right"><strong style={{ color: loanHealth.overdueLoansCount > 0 ? 'var(--danger)' : 'inherit' }}>{loanHealth.overdueLoansCount}</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section className="wire-card">
+      <p className="eyebrow strong">4. Transparency & System Status</p>
+      <div className="queue-row" style={{ padding: 0, border: 'none' }}>
+        <div><p>Last Synchronization</p></div>
+        <div className="right"><strong>{shortDate(transparency.lastSync)}</strong></div>
+      </div>
+      <div className="queue-row" style={{ padding: 0, border: 'none', marginTop: 10 }}>
+        <div><p>Pending Offline Transactions</p></div>
+        <div className="right"><strong>0</strong></div>
+      </div>
+      <div className="queue-row" style={{ padding: 0, border: 'none', marginTop: 10 }}>
+        <div><p>Transactions Recorded</p></div>
+        <div className="right"><strong>{transparency.totalTransactions}</strong></div>
+      </div>
+    </section>
+
+    <section className="wire-card">
+      <p className="eyebrow strong">5. Audit Status</p>
+      <div style={{ padding: 15, background: audit.isVerified ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 15 }}>
+        <span style={{ fontSize: 28 }}>{audit.isVerified ? '✓' : '⚠'}</span>
+        <div>
+          <strong style={{ color: audit.isVerified ? '#4CAF50' : 'var(--danger)', fontSize: 16 }}>{audit.isVerified ? 'Ledger integrity verified' : 'Integrity check failed'}</strong>
+          <p style={{ fontSize: 12, marginTop: 4 }}>{audit.transactionsChecked} recent transactions cryptographically verified.</p>
+        </div>
+      </div>
+    </section>
+
+    <section className="wire-card">
+      <p className="eyebrow strong">6. Recent Activity</p>
+      {recentTransactions.map((tx) => {
+        let icon = '⏺';
+        if (tx.transactionType === 'CONTRIBUTION') icon = '⬆';
+        else if (tx.transactionType === 'LOAN_DISBURSEMENT') icon = '⬇';
+        else if (tx.transactionType === 'REPAYMENT') icon = '✔';
+        else if (tx.transactionType === 'PENALTY') icon = '⚠';
+
+        return (
+          <div className="queue-row" key={tx.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 10, marginBottom: 10 }}>
+            <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
+              <span style={{ fontSize: 20, color: 'var(--primary)' }}>{icon}</span>
+              <div>
+                <strong>{tx.memberName || 'Unknown Member'}</strong>
+                <p>{tx.description || tx.transactionType}</p>
               </div>
             </div>
-          ))}
-        </section>
-      </div>
-    )}
-
-    {activeTab === 'loans' && loanBook && (
-      <div className="screen-stack">
-        <section className="wire-card">
-          <p className="eyebrow strong">Loan Book Overview</p>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 15 }}>
-            <div><strong>Active</strong><br/>{loanBook.active}</div>
-            <div><strong>Overdue</strong><br/>{loanBook.overdue}</div>
-            <div><strong>Paid</strong><br/>{loanBook.paid}</div>
-            <div><strong>Pending</strong><br/>{loanBook.pending}</div>
+            <div className="right"><p>{money(tx.amount)}</p><p style={{ fontSize: 10 }}>{shortDate(tx.timestamp)}</p></div>
           </div>
-          {loanBook.loans.map(l => (
-            <div className="queue-row" key={l.id}>
-              <div><strong>{l.memberName}</strong><p>{l.status} / due {shortDate(l.dueDate)}</p></div>
-              <div className="right">
-                <p>{money(l.totalRepayable)}</p>
-                <p style={{ fontSize: 10 }}>Paid {money(l.amountPaid)}</p>
-              </div>
-            </div>
-          ))}
-        </section>
-      </div>
-    )}
-
-    {activeTab === 'ledger' && (
-      <div className="screen-stack">
-        <section className="wire-card">
-          <p className="eyebrow strong">Transaction Ledger</p>
-          {transactions.map((tx) => (
-            <div className="queue-row" key={tx.id}>
-              <div><strong>{getMemberName(members, tx.memberId)}</strong><p>{tx.description || tx.transactionType}</p></div>
-              <div className="right"><p>{money(tx.amount)}</p><p>{shortDate(tx.timestamp)}</p></div>
-            </div>
-          ))}
-        </section>
-      </div>
-    )}
+        );
+      })}
+      {recentTransactions.length === 0 && <p style={{ fontSize: 14 }}>No recent transactions found.</p>}
+    </section>
   </div>;
 }
 

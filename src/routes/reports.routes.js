@@ -10,9 +10,11 @@ router.use(verifyToken);
 // Any authenticated member of a group can view reports
 router.use(requireRole('MEMBER', 'TREASURER', 'ADMIN'));
 
-router.get('/summary', asyncHandler(reportsController.getGroupSummary));
+// Overview Dashboard
+router.get('/dashboard', asyncHandler(reportsController.getDashboardData));
+
+// Detailed views
 router.get('/matrix', asyncHandler(reportsController.getContributionMatrix));
-router.get('/loanbook', asyncHandler(reportsController.getLoanBook));
 router.get('/statement/:memberId?', asyncHandler(reportsController.getMemberStatement));
 
 module.exports = router;

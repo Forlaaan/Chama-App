@@ -51,7 +51,7 @@ const idParams = z.object({ id: z.string().uuid('id must be a valid UUID') });
 
 const requestLoanSchema = z.object({
   body: z.object({
-    memberId: z.string().uuid('memberId must be a valid UUID'),
+    memberId: z.string().min(1, 'memberId is required'),
     groupId:  z.string().min(1, 'groupId is required'),
     principalAmount: moneyString,
     interestRate:    interestRateString,
