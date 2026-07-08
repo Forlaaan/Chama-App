@@ -20,7 +20,16 @@ function money(value) {
 
 function shortDate(value) {
   if (!value) return '-';
-  return new Date(value).toISOString().slice(0, 10);
+  const d = new Date(value);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0 && d.toDateString() === now.toDateString()) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 function getMemberName(members, id) {
@@ -334,6 +343,30 @@ function App() {
     await refreshData();
   }
 
+  async function promoteToTreasurer(memberId) {
+    const memberName = getMemberName(members, memberId);
+    if (!window.confirm(`Promote ${memberName} to Treasurer? They will gain financial management permissions.`)) return;
+    try {
+      await apiFetch('/api/members/' + memberId, { token, method: 'PATCH', body: { role: 'TREASURER' } });
+      setNotice(`${memberName} is now the Treasurer.`);
+      await refreshData();
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function demoteToMember(memberId) {
+    const memberName = getMemberName(members, memberId);
+    if (!window.confirm(`Demote ${memberName} from Treasurer to regular Member?`)) return;
+    try {
+      await apiFetch('/api/members/' + memberId, { token, method: 'PATCH', body: { role: 'MEMBER' } });
+      setNotice(`${memberName} has been demoted to Member.`);
+      await refreshData();
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
   async function sendSms(form) {
     const data = Object.fromEntries(new FormData(form));
     await apiFetch('/api/notifications/sms/test', { token, method: 'POST', body: data });
@@ -385,7 +418,7 @@ function App() {
       
       {screen === 'repayment' && <RepaymentScreen loans={loans} members={members} onSubmit={recordRepayment} onBack={() => setScreen('treasurer')} />}
       
-      {screen === 'members' && <MembersScreen role={role} members={members} removeMember={removeMember} />}
+      {screen === 'members' && <MembersScreen role={role} members={members} removeMember={removeMember} promoteToTreasurer={promoteToTreasurer} demoteToMember={demoteToMember} />}
       
       {screen === 'reports' && <ReportsScreen token={token} apiFetch={apiFetch} members={members} transactions={transactions} loans={loans} />}
       
@@ -632,9 +665,15 @@ function RepaymentScreen({ loans, members, onSubmit, onBack }) {
   return <FormScreen title="Record Repayment" onBack={onBack} onSubmit={onSubmit} successText="Repayment confirmation will appear here"><label>Select Loan<select name="loanId">{activeLoans.map((loan) => <option key={loan.id} value={loan.id}>{getMemberName(members, loan.memberId)} - {money(loan.totalRepayable)}</option>)}</select></label><label>Repayment Amount (KSH)<input name="amount" defaultValue="1000" /></label><label>Description<input name="description" defaultValue="Loan repayment" /></label></FormScreen>;
 }
 
-function MembersScreen({ role, members, removeMember }) {
+function MembersScreen({ role, members, removeMember, promoteToTreasurer, demoteToMember }) {
   const activeMembers = members.filter(m => m.status !== 'DEACTIVATED' && m.groupId !== null);
   
+  const roleBadgeStyle = (memberRole) => {
+    if (memberRole === 'ADMIN') return { background: 'var(--primary)', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, display: 'inline-block' };
+    if (memberRole === 'TREASURER') return { background: 'var(--accent)', color: '#2e2103', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, display: 'inline-block' };
+    return { background: 'var(--surface-strong)', color: 'var(--muted)', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, display: 'inline-block' };
+  };
+
   return <div className="screen-stack">
     <section className="wire-card">
       <p className="eyebrow strong">Member Directory</p>
@@ -645,9 +684,19 @@ function MembersScreen({ role, members, removeMember }) {
             <p>{member.phoneNumber}</p>
           </div>
           <div className="right">
-            <p>{member.role}</p>
-            {(role === 'ADMIN' || role === 'SUPERADMIN') && member.role !== 'SUPERADMIN' && (
-              <button style={{background: 'var(--danger)', color: 'white', marginTop: 4}} onClick={() => removeMember(member.id)}>
+            <span style={roleBadgeStyle(member.role)}>{member.role}</span>
+            {(role === 'ADMIN' || role === 'SUPERADMIN') && member.role === 'MEMBER' && (
+              <button style={{background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: '#3c2a03', marginTop: 4, fontSize: 11}} onClick={() => promoteToTreasurer(member.id)}>
+                Make Treasurer
+              </button>
+            )}
+            {(role === 'ADMIN' || role === 'SUPERADMIN') && member.role === 'TREASURER' && (
+              <button style={{background: 'var(--surface-strong)', borderColor: 'var(--muted)', color: 'var(--muted)', marginTop: 4, fontSize: 11}} onClick={() => demoteToMember(member.id)}>
+                Demote to Member
+              </button>
+            )}
+            {(role === 'ADMIN' || role === 'SUPERADMIN') && member.role !== 'SUPERADMIN' && member.role !== 'ADMIN' && (
+              <button style={{background: 'var(--danger)', color: 'white', marginTop: 4, fontSize: 11}} onClick={() => removeMember(member.id)}>
                 Remove
               </button>
             )}
@@ -677,103 +726,146 @@ function ReportsScreen({ token, apiFetch }) {
 
   const { financialHealth, loanHealth, compliance, transparency, audit, recentTransactions } = dashboard;
   const complianceRate = compliance.totalActiveMembers > 0 ? Math.round((compliance.membersContributedThisCycle / compliance.totalActiveMembers) * 100) : 0;
+  const systemHealthy = loanHealth.overdueLoansCount === 0;
 
-  return <div className="screen-stack" style={{ paddingBottom: 20 }}>
-    <h2 style={{ padding: '0 15px', marginTop: 10, fontSize: 24, fontWeight: '700' }}>Financial Overview</h2>
+  return <div className="screen-stack" style={{ paddingBottom: 20, gap: 12 }}>
+    <h2 style={{ padding: '0 15px', marginTop: 10, fontSize: 22, fontWeight: '700' }}>Financial Overview</h2>
     
-    <section className="wire-card">
-      <p className="eyebrow strong">1. Financial Health</p>
-      <h2>{money(financialHealth.totalMemberSavings)}</h2>
-      <p>Total Member Savings</p>
-      <hr style={{ margin: '10px 0', border: 'none', borderTop: '1px solid rgba(255,255,255,0.1)' }} />
-      <div>
-        <h2>{financialHealth.activeMembersCount}</h2>
-        <p>Active Members</p>
+    {/* Executive Status Banner */}
+    <section className="wire-card" style={{ padding: 12, background: systemHealthy ? 'linear-gradient(135deg, #e8f5e9, #c8e6c9)' : 'linear-gradient(135deg, #fff3e0, #ffe0b2)', border: systemHealthy ? '2px solid #2e7d32' : '2px solid #e65100' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 14 }}>{systemHealthy ? '🟢' : '🟡'}</span>
+        <strong style={{ fontSize: 15, color: systemHealthy ? '#1b5e20' : '#bf360c' }}>
+          System Status: {systemHealthy ? 'Healthy' : 'Attention Needed'}
+        </strong>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', fontSize: 12, color: 'var(--ink)' }}>
+        <span><strong>{financialHealth.activeMembersCount}</strong> Active Members</span>
+        <span><strong>{money(financialHealth.totalMemberSavings)}</strong> Saved</span>
+        {loanHealth.overdueLoansCount > 0 && <span style={{ color: 'var(--danger)', fontWeight: 700 }}><strong>{loanHealth.overdueLoansCount}</strong> Loan{loanHealth.overdueLoansCount !== 1 ? 's' : ''} Overdue</span>}
+        <span>Last Sync: <strong>{shortDate(transparency.lastSync)}</strong></span>
+      </div>
+    </section>
+    
+    {/* Financial Health — 2×2 grid */}
+    <section className="wire-card" style={{ padding: 12 }}>
+      <p className="eyebrow strong" style={{ marginBottom: 10 }}>Financial Health</p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 6 }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Total Savings</p>
+          <strong style={{ fontSize: 17, color: 'var(--primary)' }}>{money(financialHealth.totalMemberSavings)}</strong>
+        </div>
+        <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 6 }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Active Members</p>
+          <strong style={{ fontSize: 17, color: 'var(--primary)' }}>{financialHealth.activeMembersCount}</strong>
+        </div>
+        <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 6 }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Loan Portfolio</p>
+          <strong style={{ fontSize: 17, color: 'var(--accent)' }}>{money(loanHealth.outstandingLoanValue)}</strong>
+        </div>
+        <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 6 }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Transactions</p>
+          <strong style={{ fontSize: 17, color: 'var(--primary)' }}>{transparency.totalTransactions}</strong>
+        </div>
       </div>
     </section>
 
-    <section className="wire-card">
-      <p className="eyebrow strong">2. Contribution Compliance</p>
-      <div style={{ marginBottom: 15 }}>
+    {/* Contribution Compliance */}
+    <section className="wire-card" style={{ padding: 12 }}>
+      <p className="eyebrow strong" style={{ marginBottom: 8 }}>Contribution Compliance</p>
+      <div style={{ marginBottom: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-          <span>Current Contribution Cycle</span>
+          <span style={{ fontSize: 12 }}>Current Cycle</span>
           <strong>{complianceRate}%</strong>
         </div>
-        <div style={{ width: '100%', background: 'rgba(255,255,255,0.1)', height: 8, borderRadius: 4, overflow: 'hidden' }}>
-          <div style={{ width: `${complianceRate}%`, background: 'var(--primary)', height: '100%' }}></div>
+        <div style={{ width: '100%', background: 'var(--surface-strong)', height: 8, borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ width: `${complianceRate}%`, background: complianceRate >= 80 ? 'var(--primary)' : complianceRate >= 50 ? 'var(--accent)' : 'var(--danger)', height: '100%', transition: 'width 0.5s ease' }}></div>
         </div>
       </div>
       <p style={{ fontSize: 12 }}>{compliance.membersContributedThisCycle} of {compliance.totalActiveMembers} members paid this cycle.</p>
     </section>
 
-    <section className="wire-card">
-      <p className="eyebrow strong">3. Loan Health</p>
-      <div style={{ display: 'flex', gap: 10, flexDirection: 'column' }}>
-        <div className="queue-row" style={{ padding: 0, border: 'none' }}>
-          <div><strong>Outstanding Loan Value</strong></div>
-          <div className="right"><strong>{money(loanHealth.outstandingLoanValue)}</strong></div>
+    {/* Loan Health — overdue emphasis */}
+    <section className="wire-card" style={{ padding: 12 }}>
+      <p className="eyebrow strong" style={{ marginBottom: 8 }}>Loan Health</p>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1, background: 'var(--surface)', padding: '8px 10px', borderRadius: 6, textAlign: 'center' }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Outstanding</p>
+          <strong style={{ fontSize: 15, color: 'var(--primary)' }}>{money(loanHealth.outstandingLoanValue)}</strong>
         </div>
-        <div className="queue-row" style={{ padding: 0, border: 'none' }}>
-          <div><strong>Loans in Good Standing</strong></div>
-          <div className="right"><strong>{loanHealth.activeLoansCount}</strong></div>
+        <div style={{ flex: 1, background: 'var(--surface)', padding: '8px 10px', borderRadius: 6, textAlign: 'center' }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Active</p>
+          <strong style={{ fontSize: 15, color: 'var(--primary)' }}>{loanHealth.activeLoansCount}</strong>
         </div>
-        <div className="queue-row" style={{ padding: 0, border: 'none' }}>
-          <div><strong>Overdue Loans</strong></div>
-          <div className="right"><strong style={{ color: loanHealth.overdueLoansCount > 0 ? 'var(--danger)' : 'inherit' }}>{loanHealth.overdueLoansCount}</strong></div>
+        <div style={{ flex: 1, background: loanHealth.overdueLoansCount > 0 ? 'rgba(182, 66, 49, 0.1)' : 'var(--surface)', padding: '8px 10px', borderRadius: 6, textAlign: 'center', border: loanHealth.overdueLoansCount > 0 ? '1px solid var(--danger)' : 'none' }}>
+          <p style={{ margin: 0, fontSize: 11, color: loanHealth.overdueLoansCount > 0 ? 'var(--danger)' : 'var(--muted)' }}>Overdue</p>
+          <strong style={{ fontSize: loanHealth.overdueLoansCount > 0 ? 20 : 15, color: loanHealth.overdueLoansCount > 0 ? 'var(--danger)' : 'var(--primary)' }}>{loanHealth.overdueLoansCount > 0 ? '🔴 ' : ''}{loanHealth.overdueLoansCount}</strong>
         </div>
       </div>
     </section>
 
-    <section className="wire-card">
-      <p className="eyebrow strong">4. Transparency & System Status</p>
-      <div className="queue-row" style={{ padding: 0, border: 'none' }}>
-        <div><p>Last Synchronization</p></div>
-        <div className="right"><strong>{shortDate(transparency.lastSync)}</strong></div>
-      </div>
-      <div className="queue-row" style={{ padding: 0, border: 'none', marginTop: 10 }}>
-        <div><p>Pending Offline Transactions</p></div>
-        <div className="right"><strong>0</strong></div>
-      </div>
-      <div className="queue-row" style={{ padding: 0, border: 'none', marginTop: 10 }}>
-        <div><p>Transactions Recorded</p></div>
-        <div className="right"><strong>{transparency.totalTransactions}</strong></div>
-      </div>
-    </section>
-
-    <section className="wire-card">
-      <p className="eyebrow strong">5. Audit Status</p>
-      <div style={{ padding: 15, background: audit.isVerified ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 15 }}>
-        <span style={{ fontSize: 28 }}>{audit.isVerified ? '✓' : '⚠'}</span>
+    {/* Audit Status — safe messaging */}
+    <section className="wire-card" style={{ padding: 12 }}>
+      <p className="eyebrow strong" style={{ marginBottom: 8 }}>Audit Status</p>
+      <div style={{ padding: 12, background: audit.isVerified ? 'rgba(76, 175, 80, 0.12)' : 'rgba(255, 193, 7, 0.12)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12, border: audit.isVerified ? '1px solid rgba(76,175,80,0.3)' : '1px solid rgba(255,193,7,0.4)' }}>
+        <span style={{ fontSize: 24 }}>{audit.isVerified ? '🟢' : '🟡'}</span>
         <div>
-          <strong style={{ color: audit.isVerified ? '#4CAF50' : 'var(--danger)', fontSize: 16 }}>{audit.isVerified ? 'Ledger integrity verified' : 'Integrity check failed'}</strong>
-          <p style={{ fontSize: 12, marginTop: 4 }}>{audit.transactionsChecked} recent transactions cryptographically verified.</p>
+          <strong style={{ color: audit.isVerified ? '#2e7d32' : '#f57f17', fontSize: 14 }}>
+            {audit.isVerified ? 'Ledger integrity verified' : 'Financial reconciliation pending'}
+          </strong>
+          <p style={{ fontSize: 11, marginTop: 3, color: 'var(--muted)' }}>
+            {audit.isVerified
+              ? `${audit.transactionsChecked} transactions cryptographically verified.`
+              : `${audit.transactionsChecked} transactions awaiting verification.`}
+          </p>
         </div>
       </div>
     </section>
 
-    <section className="wire-card">
-      <p className="eyebrow strong">6. Recent Activity</p>
+    {/* Transparency */}
+    <section className="wire-card" style={{ padding: 12 }}>
+      <p className="eyebrow strong" style={{ marginBottom: 8 }}>System Status</p>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1, background: 'var(--surface)', padding: '8px 10px', borderRadius: 6, textAlign: 'center' }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Last Sync</p>
+          <strong style={{ fontSize: 13 }}>{shortDate(transparency.lastSync)}</strong>
+        </div>
+        <div style={{ flex: 1, background: 'var(--surface)', padding: '8px 10px', borderRadius: 6, textAlign: 'center' }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Offline Queue</p>
+          <strong style={{ fontSize: 13 }}>0</strong>
+        </div>
+        <div style={{ flex: 1, background: 'var(--surface)', padding: '8px 10px', borderRadius: 6, textAlign: 'center' }}>
+          <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>Total Txns</p>
+          <strong style={{ fontSize: 13 }}>{transparency.totalTransactions}</strong>
+        </div>
+      </div>
+    </section>
+
+    {/* Recent Activity — semantic icons with colors */}
+    <section className="wire-card" style={{ padding: 12 }}>
+      <p className="eyebrow strong" style={{ marginBottom: 8 }}>Recent Activity</p>
       {recentTransactions.map((tx) => {
-        let icon = '⏺';
-        if (tx.transactionType === 'CONTRIBUTION') icon = '⬆';
-        else if (tx.transactionType === 'LOAN_DISBURSEMENT') icon = '⬇';
-        else if (tx.transactionType === 'REPAYMENT') icon = '✔';
-        else if (tx.transactionType === 'PENALTY') icon = '⚠';
+        let icon = '⏺', iconColor = 'var(--muted)';
+        if (tx.transactionType === 'CONTRIBUTION') { icon = '⬆'; iconColor = '#2e7d32'; }
+        else if (tx.transactionType === 'LOAN_DISBURSEMENT') { icon = '⬇'; iconColor = '#e65100'; }
+        else if (tx.transactionType === 'REPAYMENT') { icon = '✔'; iconColor = '#2e7d32'; }
+        else if (tx.transactionType === 'PENALTY') { icon = '⚠'; iconColor = 'var(--danger)'; }
+        else if (tx.transactionType === 'EXPENSE') { icon = '💸'; iconColor = 'var(--muted)'; }
 
         return (
-          <div className="queue-row" key={tx.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 10, marginBottom: 10 }}>
-            <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
-              <span style={{ fontSize: 20, color: 'var(--primary)' }}>{icon}</span>
+          <div className="queue-row" key={tx.id} style={{ borderBottom: '1px solid var(--line)', paddingBottom: 8, marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <span style={{ fontSize: 18, color: iconColor, width: 24, textAlign: 'center' }}>{icon}</span>
               <div>
-                <strong>{tx.memberName || 'Unknown Member'}</strong>
-                <p>{tx.description || tx.transactionType}</p>
+                <strong style={{ fontSize: 13 }}>{tx.memberName || 'Unknown Member'}</strong>
+                <p style={{ fontSize: 11 }}>{tx.description || tx.transactionType.replace(/_/g, ' ')}</p>
               </div>
             </div>
-            <div className="right"><p>{money(tx.amount)}</p><p style={{ fontSize: 10 }}>{shortDate(tx.timestamp)}</p></div>
+            <div className="right"><p style={{ fontWeight: 700 }}>{money(tx.amount)}</p><p style={{ fontSize: 10 }}>{shortDate(tx.timestamp)}</p></div>
           </div>
         );
       })}
-      {recentTransactions.length === 0 && <p style={{ fontSize: 14 }}>No recent transactions found.</p>}
+      {recentTransactions.length === 0 && <p style={{ fontSize: 13, color: 'var(--muted)' }}>No recent transactions found.</p>}
     </section>
   </div>;
 }

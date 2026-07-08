@@ -18,8 +18,9 @@ async function recordRepayment(req, res) {
   });
 }
 
-async function getAllTransactions(_req, res) {
-  const transactions = transactionService.getAllTransactions();
+async function getAllTransactions(req, res) {
+  const groupId = req.user?.member?.groupId;
+  const transactions = transactionService.getAllTransactions(groupId);
   res.json({ success: true, data: transactions });
 }
 

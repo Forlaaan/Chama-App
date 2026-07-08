@@ -83,6 +83,20 @@ function createMember(input) {
 
 function updateMember(id, input) {
   const existing = getMemberById(id);
+
+  // Enforce one ADMIN and one TREASURER per group when changing roles (Blueprint §2)
+  if (input.role && input.role !== existing.role && (input.role === 'ADMIN' || input.role === 'TREASURER')) {
+    const holder = db.prepare(
+      'SELECT id, fullName FROM "Member" WHERE groupId = ? AND role = ? AND id != ?'
+    ).get(existing.groupId, input.role, id);
+    if (holder) {
+      throw new AppError(
+        `Group already has a ${input.role}: ${holder.fullName}. Please demote them first before assigning a new ${input.role}.`,
+        409
+      );
+    }
+  }
+
   const updated = {
     ...existing,
     ...input,

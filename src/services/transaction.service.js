@@ -186,7 +186,14 @@ async function recordRepayment(input, authenticatedUser) {
   });
 }
 
-function getAllTransactions() {
+function getAllTransactions(groupId) {
+  if (groupId) {
+    return db.prepare(`
+      SELECT * FROM "Transaction"
+      WHERE groupId = ?
+      ORDER BY timestamp DESC
+    `).all(groupId).map(normalizeTransaction);
+  }
   return db.prepare(`
     SELECT * FROM "Transaction"
     ORDER BY timestamp DESC
